@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process'
-import { readFile, readdir, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, mkdir, stat, lstat, readlink, symlink } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { writeFile } from 'node:fs/promises'
 import { resolvePythonCommand, resolveSkillInstallerScriptPath } from '../commandResolution.js'
 import { getSpawnInvocation } from '../utils/commandInvocation.js'
 
@@ -235,6 +237,20 @@ type SkillHubEntry = {
   path?: string
   enabled?: boolean
   installCountLabel?: string
+}
+
+async function runGitFetchWithRefLockRetry(repoDir: string, args: string[] = ['fetch', 'origin']): Promise<void> {
+  try {
+    await runCommand('git', args, { cwd: repoDir })
+  } catch (error) {
+    const message = getErrorMessage(error, '')
+    if (!message.includes("cannot lock ref 'refs/remotes/origin/")) throw error
+    const branchMatch = message.match(/refs\/remotes\/origin\/([^\s':]+)/)
+    if (!branchMatch?.[1]) throw error
+    const refPath = join(repoDir, '.git', 'refs', 'remotes', 'origin', branchMatch[1])
+    try { await rm(refPath, { force: true }) } catch {}
+    await runCommand('git', args, { cwd: repoDir })
+  }
 }
 
 async function buildLocalHubEntry(info: InstalledSkillInfo): Promise<SkillHubEntry> {
@@ -482,6 +498,57 @@ function groupRpcSkillRecords<T extends RpcSkillRecord>(skills: T[]): T[] {
 
 type InstalledSkillInfo = { name: string; path: string; enabled: boolean }
 
+type SkillsSyncState = {
+  githubToken?: string
+  githubUsername?: string
+  repoOwner?: string
+  repoName?: string
+  lastPullCommitSha?: string
+  lastPushCommitSha?: string
+  lastSyncAttemptCount?: number
+  lastSyncError?: string
+  lastSyncAtIso?: string
+}
+
+type GithubDeviceCodeResponse = {
+  device_code: string
+  user_code: string
+  verification_uri: string
+  expires_in: number
+  interval: number
+}
+
+type GithubTokenResponse = { access_token?: string; error?: string }
+
+const GITHUB_DEVICE_CLIENT_ID = 'Iv1.b507a08c87ecfe98'
+const DEFAULT_SKILLS_SYNC_REPO_NAME = 'codexskills'
+const SYNC_UPSTREAM_SKILLS_OWNER = 'OpenClawAndroid'
+const SYNC_UPSTREAM_SKILLS_REPO = 'skills'
+const PRIVATE_SYNC_BRANCH = 'main'
+const PUBLIC_UPSTREAM_BRANCH_ANDROID = 'android'
+const PUBLIC_UPSTREAM_BRANCH_DEFAULT = 'main'
+let startupSkillsSyncInitialized = false
+
+type StartupSyncStatus = {
+  inProgress: boolean
+  mode: 'unauthenticated-bootstrap' | 'authenticated-fork-sync' | 'idle'
+  branch: string
+  lastAction: string
+  lastRunAtIso: string
+  lastSuccessAtIso: string
+  lastError: string
+}
+
+const startupSyncStatus: StartupSyncStatus = {
+  inProgress: false,
+  mode: 'idle',
+  branch: PRIVATE_SYNC_BRANCH,
+  lastAction: 'not-started',
+  lastRunAtIso: '',
+  lastSuccessAtIso: '',
+  lastError: '',
+}
+
 async function scanInstalledSkillsFromDisk(): Promise<Map<string, InstalledSkillInfo>> {
   const map = new Map<string, InstalledSkillInfo>()
   const skillsDir = getSkillsInstallDir()
@@ -551,6 +618,636 @@ function extractSkillDescriptionFromMarkdown(markdown: string): string {
   return ''
 }
 
+function getSkillsSyncStatePath(): string {
+  return join(getCodexHomeDir(), 'skills-sync.json')
+}
+
+async function readSkillsSyncState(): Promise<SkillsSyncState> {
+  try {
+    const raw = await readFile(getSkillsSyncStatePath(), 'utf8')
+    const parsed = JSON.parse(raw) as SkillsSyncState
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+async function writeSkillsSyncState(state: SkillsSyncState): Promise<void> {
+  await writeFile(getSkillsSyncStatePath(), JSON.stringify(state), 'utf8')
+}
+
+async function getGithubJson<T>(url: string, token: string, method = 'GET', body?: unknown): Promise<T> {
+  const resp = await fetch(url, {
+    method,
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'codex-web-local',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+  if (!resp.ok) {
+    const text = await resp.text()
+    throw new Error(`GitHub API ${method} ${url} failed (${resp.status}): ${text}`)
+  }
+  return await resp.json() as T
+}
+
+async function startGithubDeviceLogin(): Promise<GithubDeviceCodeResponse> {
+  const resp = await fetch('https://github.com/login/device/code', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'codex-web-local',
+    },
+    body: new URLSearchParams({
+      client_id: GITHUB_DEVICE_CLIENT_ID,
+      scope: 'repo read:user',
+    }),
+  })
+  if (!resp.ok) {
+    throw new Error(`GitHub device flow init failed (${resp.status})`)
+  }
+  return await resp.json() as GithubDeviceCodeResponse
+}
+
+async function completeGithubDeviceLogin(deviceCode: string): Promise<{ token: string | null; error: string | null }> {
+  const resp = await fetch('https://github.com/login/oauth/access_token', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'codex-web-local',
+    },
+    body: new URLSearchParams({
+      client_id: GITHUB_DEVICE_CLIENT_ID,
+      device_code: deviceCode,
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+    }),
+  })
+  if (!resp.ok) {
+    throw new Error(`GitHub token exchange failed (${resp.status})`)
+  }
+  const payload = await resp.json() as GithubTokenResponse
+  if (!payload.access_token) return { token: null, error: payload.error || 'unknown_error' }
+  return { token: payload.access_token, error: null }
+}
+
+function isAndroidLikeRuntime(): boolean {
+  if (process.platform === 'android') return true
+  if (existsSync('/data/data/com.termux')) return true
+  if (process.env.TERMUX_VERSION) return true
+  const prefix = process.env.PREFIX?.toLowerCase() ?? ''
+  if (prefix.includes('/com.termux/')) return true
+  const proot = process.env.PROOT_TMP_DIR?.toLowerCase() ?? ''
+  return proot.length > 0
+}
+
+function getPreferredPublicUpstreamBranch(): string {
+  return isAndroidLikeRuntime() ? PUBLIC_UPSTREAM_BRANCH_ANDROID : PUBLIC_UPSTREAM_BRANCH_DEFAULT
+}
+
+function isUpstreamSkillsRepo(repoOwner: string, repoName: string): boolean {
+  return repoOwner.toLowerCase() === SYNC_UPSTREAM_SKILLS_OWNER.toLowerCase()
+    && repoName.toLowerCase() === SYNC_UPSTREAM_SKILLS_REPO.toLowerCase()
+}
+
+async function resolveGithubUsername(token: string): Promise<string> {
+  const user = await getGithubJson<{ login: string }>('https://api.github.com/user', token)
+  return user.login
+}
+
+async function ensurePrivateForkFromUpstream(token: string, username: string, repoName: string): Promise<void> {
+  const repoUrl = `https://api.github.com/repos/${username}/${repoName}`
+  let created = false
+  const existing = await fetch(repoUrl, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${token}`,
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'codex-web-local',
+    },
+  })
+  if (existing.ok) {
+    const details = await existing.json() as { private?: boolean }
+    if (details.private === true) return
+    await getGithubJson(repoUrl, token, 'PATCH', { private: true })
+    return
+  }
+  if (existing.status !== 404) {
+    throw new Error(`Failed to check personal repo existence (${existing.status})`)
+  }
+
+  await getGithubJson(
+    'https://api.github.com/user/repos',
+    token,
+    'POST',
+    { name: repoName, private: true, auto_init: false, description: 'Codex skills private mirror sync' },
+  )
+  created = true
+
+  let ready = false
+  for (let i = 0; i < 20; i++) {
+    const check = await fetch(repoUrl, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+        'User-Agent': 'codex-web-local',
+      },
+    })
+    if (check.ok) {
+      ready = true
+      break
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+  }
+  if (!ready) throw new Error('Private mirror repo was created but is not available yet')
+  if (!created) return
+
+  const tmp = await mkdtemp(join(tmpdir(), 'codex-skills-seed-'))
+  try {
+    const upstreamUrl = `https://github.com/${SYNC_UPSTREAM_SKILLS_OWNER}/${SYNC_UPSTREAM_SKILLS_REPO}.git`
+    const branch = PRIVATE_SYNC_BRANCH
+    try {
+      await runCommand('git', ['clone', '--depth', '1', '--single-branch', '--branch', branch, upstreamUrl, tmp])
+    } catch {
+      await runCommand('git', ['clone', '--depth', '1', upstreamUrl, tmp])
+    }
+    const privateRemote = toGitHubTokenRemote(username, repoName, token)
+    await runCommand('git', ['remote', 'set-url', 'origin', privateRemote], { cwd: tmp })
+    try { await runCommand('git', ['checkout', '-B', branch], { cwd: tmp }) } catch {}
+    await runCommand('git', ['push', '-u', 'origin', `HEAD:${branch}`], { cwd: tmp })
+  } finally {
+    await rm(tmp, { recursive: true, force: true })
+  }
+}
+
+function toGitHubTokenRemote(repoOwner: string, repoName: string, token: string): string {
+  return `https://x-access-token:${encodeURIComponent(token)}@github.com/${repoOwner}/${repoName}.git`
+}
+
+async function ensureSkillsWorkingTreeRepo(repoUrl: string, branch: string): Promise<string> {
+  const localDir = getSkillsInstallDir()
+  await mkdir(localDir, { recursive: true })
+  const gitDir = join(localDir, '.git')
+  let hasGitDir = false
+  try { hasGitDir = (await stat(gitDir)).isDirectory() } catch { hasGitDir = false }
+
+  if (!hasGitDir) {
+    await runCommand('git', ['init'], { cwd: localDir })
+    await runCommand('git', ['config', 'user.email', 'skills-sync@local'], { cwd: localDir })
+    await runCommand('git', ['config', 'user.name', 'Skills Sync'], { cwd: localDir })
+    await runCommand('git', ['add', '-A'], { cwd: localDir })
+    try { await runCommand('git', ['commit', '-m', 'Local skills snapshot before sync'], { cwd: localDir }) } catch {}
+    await runCommand('git', ['branch', '-M', branch], { cwd: localDir })
+    try { await runCommand('git', ['remote', 'add', 'origin', repoUrl], { cwd: localDir }) } catch {
+      await runCommand('git', ['remote', 'set-url', 'origin', repoUrl], { cwd: localDir })
+    }
+    await runGitFetchWithRefLockRetry(localDir)
+    try {
+      await runCommand('git', ['merge', '--allow-unrelated-histories', '--no-edit', `origin/${branch}`], { cwd: localDir })
+    } catch {}
+    return localDir
+  }
+
+  await runCommand('git', ['remote', 'set-url', 'origin', repoUrl], { cwd: localDir })
+  await runGitFetchWithRefLockRetry(localDir)
+  const hasLocalChangesBeforeSync = await hasLocalUncommittedChanges(localDir)
+  const localMtimesBeforeSync = hasLocalChangesBeforeSync ? await snapshotFileMtimes(localDir) : new Map<string, number>()
+  await resolveMergeConflictsByNewerCommit(localDir, branch, localMtimesBeforeSync)
+  try {
+    await runCommand('git', ['checkout', branch], { cwd: localDir })
+  } catch {
+    await resolveMergeConflictsByNewerCommit(localDir, branch, localMtimesBeforeSync)
+    await runCommand('git', ['checkout', '-B', branch], { cwd: localDir })
+  }
+  await resolveMergeConflictsByNewerCommit(localDir, branch, localMtimesBeforeSync)
+  const hasLocalChangesBeforePull = await hasLocalUncommittedChanges(localDir)
+  const localMtimesBeforePull = hasLocalChangesBeforePull ? await snapshotFileMtimes(localDir) : new Map<string, number>()
+  let createdAutostash = false
+  try {
+    const stashOutput = await runCommandWithOutput('git', ['stash', 'push', '--include-untracked', '-m', 'codex-skills-autostash'], { cwd: localDir })
+    createdAutostash = !stashOutput.includes('No local changes to save')
+  } catch {}
+  let pulledMtimes = new Map<string, number>()
+  await runGitFetchWithRefLockRetry(localDir, ['fetch', 'origin', branch])
+  await runCommand('git', ['reset', '--hard', `origin/${branch}`], { cwd: localDir })
+  pulledMtimes = await snapshotFileMtimes(localDir)
+  if (createdAutostash) {
+    try {
+      await runCommand('git', ['stash', 'pop'], { cwd: localDir })
+    } catch {
+      await resolveStashPopConflictsByFileTime(localDir, localMtimesBeforePull, pulledMtimes)
+    }
+  }
+  return localDir
+}
+
+async function resolveMergeConflictsByNewerCommit(
+  repoDir: string,
+  branch: string,
+  localMtimesBeforeSync: Map<string, number> = new Map<string, number>(),
+): Promise<void> {
+  // Keep resolving until merge/rebase no longer reports unmerged paths.
+  for (let i = 0; i < 20; i++) {
+    const unmerged = (await runCommandWithOutput('git', ['diff', '--name-only', '--diff-filter=U'], { cwd: repoDir }))
+      .split(/\r?\n/)
+      .map((row) => row.trim())
+      .filter(Boolean)
+    if (unmerged.length === 0) return
+    for (const path of unmerged) {
+      const localMtimeMs = localMtimesBeforeSync.get(path) ?? 0
+      const localMtimeSec = Math.floor(localMtimeMs / 1000)
+      const remoteCommitTime = await getCommitTime(repoDir, `origin/${branch}`, path)
+      if (remoteCommitTime > localMtimeSec) {
+        await checkoutConflictSideWithFallback(repoDir, path, '--theirs')
+      } else {
+        await checkoutConflictSideWithFallback(repoDir, path, '--ours')
+      }
+      await runCommand('git', ['add', '--', path], { cwd: repoDir })
+    }
+    const rebaseHead = await readOptionalGitRef(repoDir, 'REBASE_HEAD')
+    if (rebaseHead) {
+      try {
+        await runCommand('git', ['rebase', '--continue'], { cwd: repoDir })
+        continue
+      } catch {
+        // Continue loop and resolve next rebase-conflict batch.
+        continue
+      }
+    }
+    const mergeHead = await readOptionalGitRef(repoDir, 'MERGE_HEAD')
+    if (mergeHead) {
+      await runCommand('git', ['commit', '-m', 'Auto-resolve skills merge by mtime policy'], { cwd: repoDir })
+      continue
+    }
+  }
+  throw new Error('Auto-resolve exceeded retry limit while reconciling sync conflicts')
+}
+
+async function readOptionalGitRef(repoDir: string, ref: string): Promise<string> {
+  try {
+    return (await runCommandWithOutput('git', ['rev-parse', '-q', '--verify', ref], { cwd: repoDir })).trim()
+  } catch {
+    return ''
+  }
+}
+
+async function listUnmergedStages(repoDir: string, path: string): Promise<Set<number>> {
+  const raw = (await runCommandWithOutput('git', ['ls-files', '-u', '--', path], { cwd: repoDir })).trim()
+  const stages = new Set<number>()
+  if (!raw) return stages
+  for (const line of raw.split(/\r?\n/)) {
+    const parts = line.trim().split(/\s+/)
+    const stage = Number.parseInt(parts[2] ?? '', 10)
+    if (Number.isInteger(stage)) stages.add(stage)
+  }
+  return stages
+}
+
+async function checkoutConflictSideWithFallback(
+  repoDir: string,
+  path: string,
+  preferredSide: '--ours' | '--theirs',
+): Promise<void> {
+  const stages = await listUnmergedStages(repoDir, path)
+  const hasOurs = stages.has(2)
+  const hasTheirs = stages.has(3)
+  if (!hasOurs && !hasTheirs) return
+  if (preferredSide === '--ours') {
+    if (hasOurs) {
+      await runCommand('git', ['checkout', '--ours', '--', path], { cwd: repoDir })
+      return
+    }
+    await runCommand('git', ['checkout', '--theirs', '--', path], { cwd: repoDir })
+    return
+  }
+  if (hasTheirs) {
+    await runCommand('git', ['checkout', '--theirs', '--', path], { cwd: repoDir })
+    return
+  }
+  await runCommand('git', ['checkout', '--ours', '--', path], { cwd: repoDir })
+}
+
+async function getCommitTime(repoDir: string, ref: string, path: string): Promise<number> {
+  try {
+    const output = (await runCommandWithOutput('git', ['log', '-1', '--format=%ct', ref, '--', path], { cwd: repoDir })).trim()
+    return output ? Number.parseInt(output, 10) : 0
+  } catch {
+    return 0
+  }
+}
+
+async function resolveStashPopConflictsByFileTime(
+  repoDir: string,
+  localMtimesBeforePull: Map<string, number>,
+  pulledMtimes: Map<string, number>,
+): Promise<void> {
+  const unmerged = (await runCommandWithOutput('git', ['diff', '--name-only', '--diff-filter=U'], { cwd: repoDir }))
+    .split(/\r?\n/)
+    .map((row) => row.trim())
+    .filter(Boolean)
+  if (unmerged.length === 0) return
+  for (const path of unmerged) {
+    const localMtime = localMtimesBeforePull.get(path) ?? 0
+    const pulledMtime = pulledMtimes.get(path) ?? 0
+    const side = localMtime >= pulledMtime ? '--theirs' : '--ours'
+    await checkoutConflictSideWithFallback(repoDir, path, side)
+    await runCommand('git', ['add', '--', path], { cwd: repoDir })
+  }
+  const mergeHead = await readOptionalGitRef(repoDir, 'MERGE_HEAD')
+  if (mergeHead) {
+    await runCommand('git', ['commit', '-m', 'Auto-resolve stash-pop conflicts by file time'], { cwd: repoDir })
+  }
+}
+
+async function snapshotFileMtimes(dir: string): Promise<Map<string, number>> {
+  const mtimes = new Map<string, number>()
+  await walkFileMtimes(dir, dir, mtimes)
+  return mtimes
+}
+
+async function hasLocalUncommittedChanges(repoDir: string): Promise<boolean> {
+  const status = (await runCommandWithOutput('git', ['status', '--porcelain'], { cwd: repoDir })).trim()
+  return status.length > 0
+}
+
+async function hasCommittableWorkingTreeChanges(repoDir: string): Promise<boolean> {
+  try {
+    await runCommand('git', ['diff', '--quiet', '--exit-code', '--ignore-submodules=dirty'], { cwd: repoDir })
+    await runCommand('git', ['diff', '--cached', '--quiet', '--exit-code', '--ignore-submodules=dirty'], { cwd: repoDir })
+  } catch {
+    return true
+  }
+  const untracked = (await runCommandWithOutput('git', ['ls-files', '--others', '--exclude-standard'], { cwd: repoDir })).trim()
+  return untracked.length > 0
+}
+
+async function walkFileMtimes(rootDir: string, currentDir: string, out: Map<string, number>): Promise<void> {
+  let entries: Array<{ name: string | Buffer; isDirectory: () => boolean; isFile: () => boolean }>
+  try {
+    entries = (await readdir(currentDir, { withFileTypes: true })) as Array<{ name: string | Buffer; isDirectory: () => boolean; isFile: () => boolean }>
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    const entryName = String(entry.name)
+    if (entryName === '.git') continue
+    const absolutePath = join(currentDir, entryName)
+    const relativePath = absolutePath.slice(rootDir.length + 1)
+    if (entry.isDirectory()) {
+      await walkFileMtimes(rootDir, absolutePath, out)
+      continue
+    }
+    if (!entry.isFile()) continue
+    try {
+      const info = await stat(absolutePath)
+      out.set(relativePath, info.mtimeMs)
+    } catch {}
+  }
+}
+
+async function syncInstalledSkillsFolderToRepo(
+  token: string,
+  repoOwner: string,
+  repoName: string,
+  _installedMap: Map<string, InstalledSkillInfo>,
+): Promise<void> {
+  async function hasTrackedLocalFileChanges(repoDir: string, filePath: string): Promise<boolean> {
+    const diffHead = (await runCommandWithOutput('git', ['diff', '--name-only', 'HEAD', '--', filePath], { cwd: repoDir })).trim()
+    if (diffHead.length > 0) return true
+    const diffCached = (await runCommandWithOutput('git', ['diff', '--cached', '--name-only', '--', filePath], { cwd: repoDir })).trim()
+    return diffCached.length > 0
+  }
+
+  async function restoreProtectedFilesFromOrigin(repoDir: string, branch: string): Promise<void> {
+    const protectedFiles = ['AGENTS.md']
+    for (const filePath of protectedFiles) {
+      const hasLocalEdits = await hasTrackedLocalFileChanges(repoDir, filePath)
+      if (hasLocalEdits) continue
+      try {
+        await runCommand('git', ['cat-file', '-e', `origin/${branch}:${filePath}`], { cwd: repoDir })
+      } catch {
+        continue
+      }
+      await runCommand('git', ['checkout', `origin/${branch}`, '--', filePath], { cwd: repoDir })
+    }
+    try {
+      await runCommand('git', ['cat-file', '-e', `origin/${branch}:shared_skills`], { cwd: repoDir })
+      await runCommand('git', ['checkout', `origin/${branch}`, '--', 'shared_skills'], { cwd: repoDir })
+    } catch {
+      // Ignore when the branch does not track the nested shared_skills gitlink.
+    }
+  }
+
+  function isNonFastForwardPushError(error: unknown): boolean {
+    const text = getErrorMessage(error, '').toLowerCase()
+    return text.includes('non-fast-forward')
+      || text.includes('fetch first')
+      || (text.includes('rejected') && text.includes('push'))
+  }
+
+  async function pushWithNonFastForwardRetry(repoDir: string, branch: string): Promise<void> {
+    const maxAttempts = 3
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const hasLocalChangesBeforeReconcile = await hasLocalUncommittedChanges(repoDir)
+      const localMtimesBeforeReconcile = hasLocalChangesBeforeReconcile ? await snapshotFileMtimes(repoDir) : new Map<string, number>()
+      await runGitFetchWithRefLockRetry(repoDir)
+      try {
+        await runCommand('git', ['rebase', `origin/${branch}`], { cwd: repoDir })
+      } catch {
+        try { await runCommand('git', ['rebase', '--abort'], { cwd: repoDir }) } catch {}
+        try {
+          await runCommand('git', ['pull', '--rebase', '--autostash', 'origin', branch], { cwd: repoDir })
+        } catch {
+          await resolveMergeConflictsByNewerCommit(repoDir, branch, localMtimesBeforeReconcile)
+          await runCommand('git', ['pull', '--rebase', '--autostash', 'origin', branch], { cwd: repoDir })
+        }
+      }
+      try {
+        await runCommand('git', ['push', '--no-recurse-submodules', 'origin', `HEAD:${branch}`], { cwd: repoDir })
+        const state = await readSkillsSyncState()
+        const pushedHead = await runCommandWithOutput('git', ['rev-parse', 'HEAD'], { cwd: repoDir })
+        await writeSkillsSyncState({
+          ...state,
+          lastPushCommitSha: pushedHead.trim(),
+          lastSyncAttemptCount: attempt,
+          lastSyncError: '',
+          lastSyncAtIso: new Date().toISOString(),
+        })
+        return
+      } catch (error) {
+        if (!isNonFastForwardPushError(error) || attempt >= maxAttempts) {
+          const state = await readSkillsSyncState()
+          await writeSkillsSyncState({
+            ...state,
+            lastSyncAttemptCount: attempt,
+            lastSyncError: getErrorMessage(error, 'push failed'),
+            lastSyncAtIso: new Date().toISOString(),
+          })
+          throw error
+        }
+      }
+    }
+    throw new Error('Failed to push after non-fast-forward retries')
+  }
+
+  const remoteUrl = toGitHubTokenRemote(repoOwner, repoName, token)
+  const branch = PRIVATE_SYNC_BRANCH
+  const repoDir = await ensureSkillsWorkingTreeRepo(remoteUrl, branch)
+  void _installedMap
+  await runCommand('git', ['config', 'user.email', 'skills-sync@local'], { cwd: repoDir })
+  await runCommand('git', ['config', 'user.name', 'Skills Sync'], { cwd: repoDir })
+  await restoreProtectedFilesFromOrigin(repoDir, branch)
+  await runCommand('git', ['add', '.'], { cwd: repoDir })
+  try {
+    await runCommand('git', ['diff', '--cached', '--quiet', '--exit-code'], { cwd: repoDir })
+    return
+  } catch {}
+  await runCommand('git', ['commit', '-m', 'Sync skills files'], { cwd: repoDir })
+  await pushWithNonFastForwardRetry(repoDir, branch)
+}
+
+async function pullInstalledSkillsFolderFromRepo(token: string, repoOwner: string, repoName: string): Promise<void> {
+  const remoteUrl = toGitHubTokenRemote(repoOwner, repoName, token)
+  const branch = PRIVATE_SYNC_BRANCH
+  await ensureSkillsWorkingTreeRepo(remoteUrl, branch)
+}
+
+async function bootstrapSkillsFromUpstreamIntoLocal(): Promise<void> {
+  const repoUrl = `https://github.com/${SYNC_UPSTREAM_SKILLS_OWNER}/${SYNC_UPSTREAM_SKILLS_REPO}.git`
+  const branch = getPreferredPublicUpstreamBranch()
+  await ensureSkillsWorkingTreeRepo(repoUrl, branch)
+}
+
+async function autoPushSyncedSkills(_appServer: AppServerLike): Promise<void> {
+  const state = await readSkillsSyncState()
+  if (!state.githubToken || !state.repoOwner || !state.repoName) return
+  if (isUpstreamSkillsRepo(state.repoOwner, state.repoName)) {
+    throw new Error('Refusing to push to upstream skills repository')
+  }
+  const repoDir = getSkillsInstallDir()
+  await runCommand('git', ['fetch', 'origin', PRIVATE_SYNC_BRANCH], { cwd: repoDir })
+  const head = (await runCommandWithOutput('git', ['rev-parse', 'HEAD'], { cwd: repoDir })).trim()
+  const originHead = (await runCommandWithOutput('git', ['rev-parse', `origin/${PRIVATE_SYNC_BRANCH}`], { cwd: repoDir })).trim()
+  const hasCommittableChanges = await hasCommittableWorkingTreeChanges(repoDir)
+  // After a successful pull, if local tree is already clean and equal to remote,
+  // skip push entirely to avoid rewriting/deleting remote-only updates.
+  if (!hasCommittableChanges && head === originHead) return
+  const installedMap = await scanInstalledSkillsFromDisk()
+  await syncInstalledSkillsFolderToRepo(state.githubToken, state.repoOwner, state.repoName, installedMap)
+}
+
+async function ensureCodexAgentsSymlinkToSkillsAgents(): Promise<void> {
+  const codexHomeDir = getCodexHomeDir()
+  const skillsAgentsPath = join(codexHomeDir, 'skills', 'AGENTS.md')
+  const codexAgentsPath = join(codexHomeDir, 'AGENTS.md')
+  await mkdir(join(codexHomeDir, 'skills'), { recursive: true })
+  let copiedFromCodex = false
+  try {
+    const codexAgentsStat = await lstat(codexAgentsPath)
+    if (codexAgentsStat.isFile() || codexAgentsStat.isSymbolicLink()) {
+      const content = await readFile(codexAgentsPath, 'utf8')
+      await writeFile(skillsAgentsPath, content, 'utf8')
+      copiedFromCodex = true
+    } else {
+      await rm(codexAgentsPath, { force: true, recursive: true })
+    }
+  } catch {}
+  if (!copiedFromCodex) {
+    try {
+      const skillsAgentsStat = await stat(skillsAgentsPath)
+      if (!skillsAgentsStat.isFile()) {
+        await rm(skillsAgentsPath, { force: true, recursive: true })
+        await writeFile(skillsAgentsPath, '', 'utf8')
+      }
+    } catch {
+      await writeFile(skillsAgentsPath, '', 'utf8')
+    }
+  }
+  const relativeTarget = join('skills', 'AGENTS.md')
+  try {
+    const current = await lstat(codexAgentsPath)
+    if (current.isSymbolicLink()) {
+      const existingTarget = await readlink(codexAgentsPath)
+      if (existingTarget === relativeTarget) return
+    }
+    await rm(codexAgentsPath, { force: true, recursive: true })
+  } catch {}
+  await symlink(relativeTarget, codexAgentsPath)
+}
+
+async function runSkillsSyncStartup(
+  appServer: AppServerLike,
+  options: { propagateErrors?: boolean } = {},
+): Promise<void> {
+  if (startupSyncStatus.inProgress) return
+  startupSyncStatus.inProgress = true
+  startupSyncStatus.lastRunAtIso = new Date().toISOString()
+  startupSyncStatus.lastError = ''
+  startupSyncStatus.branch = PRIVATE_SYNC_BRANCH
+  try {
+    const state = await readSkillsSyncState()
+    if (!state.githubToken) {
+      await ensureCodexAgentsSymlinkToSkillsAgents()
+      if (!isAndroidLikeRuntime()) {
+        startupSyncStatus.mode = 'idle'
+        startupSyncStatus.lastAction = 'skip-upstream-non-android'
+        startupSyncStatus.lastSuccessAtIso = new Date().toISOString()
+        return
+      }
+      startupSyncStatus.mode = 'unauthenticated-bootstrap'
+      startupSyncStatus.branch = getPreferredPublicUpstreamBranch()
+      startupSyncStatus.lastAction = 'pull-upstream'
+      await bootstrapSkillsFromUpstreamIntoLocal()
+      try { await appServer.rpc('skills/list', { forceReload: true }) } catch {}
+      startupSyncStatus.lastSuccessAtIso = new Date().toISOString()
+      startupSyncStatus.lastAction = 'pull-upstream-complete'
+      return
+    }
+    startupSyncStatus.mode = 'authenticated-fork-sync'
+    startupSyncStatus.branch = PRIVATE_SYNC_BRANCH
+    startupSyncStatus.lastAction = 'ensure-private-fork'
+    const username = state.githubUsername || await resolveGithubUsername(state.githubToken)
+    const repoName = DEFAULT_SKILLS_SYNC_REPO_NAME
+    await ensurePrivateForkFromUpstream(state.githubToken, username, repoName)
+    await writeSkillsSyncState({ ...state, githubUsername: username, repoOwner: username, repoName })
+    startupSyncStatus.lastAction = 'pull-private-fork'
+    await pullInstalledSkillsFolderFromRepo(state.githubToken, username, repoName)
+    try { await appServer.rpc('skills/list', { forceReload: true }) } catch {}
+    startupSyncStatus.lastAction = 'push-private-fork'
+    await autoPushSyncedSkills(appServer)
+    startupSyncStatus.lastSuccessAtIso = new Date().toISOString()
+    startupSyncStatus.lastAction = 'startup-sync-complete'
+  } catch (error) {
+    startupSyncStatus.lastError = getErrorMessage(error, 'startup-sync-failed')
+    startupSyncStatus.lastAction = 'startup-sync-failed'
+    if (options.propagateErrors) throw error
+  } finally {
+    startupSyncStatus.inProgress = false
+  }
+}
+
+export async function initializeSkillsSyncOnStartup(appServer: AppServerLike): Promise<void> {
+  if (startupSkillsSyncInitialized) return
+  startupSkillsSyncInitialized = true
+  await runSkillsSyncStartup(appServer)
+}
+
+async function finalizeGithubLoginAndSync(token: string, username: string, appServer: AppServerLike): Promise<void> {
+  const repoName = DEFAULT_SKILLS_SYNC_REPO_NAME
+  await ensurePrivateForkFromUpstream(token, username, repoName)
+  const current = await readSkillsSyncState()
+  await writeSkillsSyncState({ ...current, githubToken: token, githubUsername: username, repoOwner: username, repoName })
+  await pullInstalledSkillsFolderFromRepo(token, username, repoName)
+  try { await appServer.rpc('skills/list', { forceReload: true }) } catch {}
+  await autoPushSyncedSkills(appServer)
+}
+
 export async function handleSkillsRoutes(
   req: IncomingMessage,
   res: ServerResponse,
@@ -583,6 +1280,160 @@ export async function handleSkillsRoutes(
       setJson(res, 200, { results })
     } catch (error) {
       setJson(res, 502, { error: getErrorMessage(error, 'Failed to search skills') })
+    }
+    return true
+  }
+
+  if (req.method === 'GET' && url.pathname === '/codex-api/skills-sync/status') {
+    const state = await readSkillsSyncState()
+    setJson(res, 200, {
+      data: {
+        loggedIn: Boolean(state.githubToken),
+        githubUsername: state.githubUsername ?? '',
+        repoOwner: state.repoOwner ?? '',
+        repoName: state.repoName ?? '',
+        configured: Boolean(state.githubToken && state.repoOwner && state.repoName),
+        telemetry: {
+          lastPullCommitSha: state.lastPullCommitSha ?? '',
+          lastPushCommitSha: state.lastPushCommitSha ?? '',
+          lastSyncAttemptCount: state.lastSyncAttemptCount ?? 0,
+          lastSyncError: state.lastSyncError ?? '',
+          lastSyncAtIso: state.lastSyncAtIso ?? '',
+        },
+        startup: {
+          inProgress: startupSyncStatus.inProgress,
+          mode: startupSyncStatus.mode,
+          branch: startupSyncStatus.branch,
+          lastAction: startupSyncStatus.lastAction,
+          lastRunAtIso: startupSyncStatus.lastRunAtIso,
+          lastSuccessAtIso: startupSyncStatus.lastSuccessAtIso,
+          lastError: startupSyncStatus.lastError,
+        },
+      },
+    })
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/codex-api/skills-sync/github/start-login') {
+    try {
+      const started = await startGithubDeviceLogin()
+      setJson(res, 200, { data: started })
+    } catch (error) {
+      setJson(res, 502, { error: getErrorMessage(error, 'Failed to start GitHub login') })
+    }
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/codex-api/skills-sync/github/token-login') {
+    try {
+      const payload = asRecord(await readJsonBody(req))
+      const token = typeof payload?.token === 'string' ? payload.token.trim() : ''
+      if (!token) {
+        setJson(res, 400, { error: 'Missing GitHub token' })
+        return true
+      }
+      const username = await resolveGithubUsername(token)
+      await finalizeGithubLoginAndSync(token, username, appServer)
+      setJson(res, 200, { ok: true, data: { githubUsername: username } })
+    } catch (error) {
+      setJson(res, 502, { error: getErrorMessage(error, 'Failed to login with GitHub token') })
+    }
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/codex-api/skills-sync/github/logout') {
+    try {
+      const state = await readSkillsSyncState()
+      await writeSkillsSyncState({
+        ...state,
+        githubToken: undefined,
+        githubUsername: undefined,
+        repoOwner: undefined,
+        repoName: undefined,
+      })
+      setJson(res, 200, { ok: true })
+    } catch (error) {
+      setJson(res, 500, { error: getErrorMessage(error, 'Failed to logout GitHub') })
+    }
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/codex-api/skills-sync/github/complete-login') {
+    try {
+      const payload = asRecord(await readJsonBody(req))
+      const deviceCode = typeof payload?.deviceCode === 'string' ? payload.deviceCode : ''
+      if (!deviceCode) {
+        setJson(res, 400, { error: 'Missing deviceCode' })
+        return true
+      }
+      const result = await completeGithubDeviceLogin(deviceCode)
+      if (!result.token) {
+        setJson(res, 200, { ok: false, pending: result.error === 'authorization_pending', error: result.error || 'login_failed' })
+        return true
+      }
+      const token = result.token
+      const username = await resolveGithubUsername(token)
+      await finalizeGithubLoginAndSync(token, username, appServer)
+      setJson(res, 200, { ok: true, data: { githubUsername: username } })
+    } catch (error) {
+      setJson(res, 502, { error: getErrorMessage(error, 'Failed to complete GitHub login') })
+    }
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/codex-api/skills-sync/push') {
+    try {
+      const state = await readSkillsSyncState()
+      if (!state.githubToken || !state.repoOwner || !state.repoName) {
+        setJson(res, 400, { error: 'Skills sync is not configured yet' })
+        return true
+      }
+      if (isUpstreamSkillsRepo(state.repoOwner, state.repoName)) {
+        setJson(res, 400, { error: 'Refusing to push to upstream repository' })
+        return true
+      }
+      const installedMap = await collectInstalledSkillsMap(appServer)
+      await syncInstalledSkillsFolderToRepo(state.githubToken, state.repoOwner, state.repoName, installedMap)
+      setJson(res, 200, { ok: true, data: { synced: installedMap.size } })
+    } catch (error) {
+      setJson(res, 502, { error: getErrorMessage(error, 'Failed to push synced skills') })
+    }
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/codex-api/skills-sync/startup-sync') {
+    try {
+      await runSkillsSyncStartup(appServer, { propagateErrors: true })
+      setJson(res, 200, { ok: true })
+    } catch (error) {
+      setJson(res, 502, { error: getErrorMessage(error, 'Failed to run startup sync') })
+    }
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/codex-api/skills-sync/pull') {
+    try {
+      const state = await readSkillsSyncState()
+      if (!state.githubToken || !state.repoOwner || !state.repoName) {
+        await bootstrapSkillsFromUpstreamIntoLocal()
+        try { await appServer.rpc('skills/list', { forceReload: true }) } catch {}
+        setJson(res, 200, { ok: true, data: { synced: 0, source: 'upstream' } })
+        return true
+      }
+      await pullInstalledSkillsFolderFromRepo(state.githubToken, state.repoOwner, state.repoName)
+      const localSkills = await scanInstalledSkillsFromDisk()
+      const pulledHead = await runCommandWithOutput('git', ['rev-parse', 'HEAD'], { cwd: getSkillsInstallDir() }).catch(() => '')
+      await writeSkillsSyncState({
+        ...state,
+        lastPullCommitSha: pulledHead.trim(),
+        lastSyncAttemptCount: 1,
+        lastSyncError: '',
+        lastSyncAtIso: new Date().toISOString(),
+      })
+      try { await appServer.rpc('skills/list', { forceReload: true }) } catch {}
+      setJson(res, 200, { ok: true, data: { synced: localSkills.size } })
+    } catch (error) {
+      setJson(res, 502, { error: getErrorMessage(error, 'Failed to pull synced skills') })
     }
     return true
   }
@@ -635,6 +1486,7 @@ export async function handleSkillsRoutes(
         throw new Error(`Skill install completed but ${installSource} was not found in local installed skills`)
       }
       await ensureInstalledSkillIsValid(appServer, installed.path)
+      autoPushSyncedSkills(appServer).catch(() => {})
       setJson(res, 200, { ok: true, path: installed.path })
     } catch (error) {
       setJson(res, 502, { error: getErrorMessage(error, 'Failed to install skill') })
@@ -654,6 +1506,7 @@ export async function handleSkillsRoutes(
         return true
       }
       await rm(target, { recursive: true, force: true })
+      autoPushSyncedSkills(appServer).catch(() => {})
       try { await withTimeout(appServer.rpc('skills/list', { forceReload: true }), 10_000, 'skills/list reload') } catch {}
       setJson(res, 200, { ok: true, deletedPath: target })
     } catch (error) {

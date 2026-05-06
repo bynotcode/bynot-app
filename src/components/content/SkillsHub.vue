@@ -4,6 +4,50 @@
       <h2 class="skills-hub-title">{{ t('Skills Hub') }}</h2>
       <p class="skills-hub-subtitle">{{ t('Manage installed skills on this machine') }}</p>
     </div>
+
+    <div class="skills-sync-panel">
+      <div class="skills-sync-header">
+        <strong>{{ t('Skills Sync (GitHub)') }}</strong>
+        <a
+          v-if="syncStatus.configured && githubRepoUrl"
+          class="skills-sync-badge skills-sync-badge-link"
+          :href="githubRepoUrl"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {{ t('Connected') }}: {{ syncStatus.repoOwner }}/{{ syncStatus.repoName }}
+        </a>
+        <span v-else-if="syncStatus.loggedIn" class="skills-sync-badge">{{ t('Logged in as') }} {{ syncStatus.githubUsername }}</span>
+        <span v-else class="skills-sync-badge">{{ t('Not connected') }}</span>
+      </div>
+      <div class="skills-sync-meta">
+        <span>{{ t('Startup') }}: {{ syncStatus.startup.mode }}</span>
+        <span>{{ t('Branch') }}: {{ syncStatus.startup.branch }}</span>
+        <span>{{ t('Action') }}: {{ syncStatus.startup.lastAction }}</span>
+      </div>
+      <div v-if="syncStatus.startup.lastError" class="skills-sync-error">
+        {{ syncStatus.startup.lastError }}
+      </div>
+      <div v-if="syncActionStatus" class="skills-sync-meta">
+        <span>{{ t('Manual sync') }}: {{ syncActionStatus }}</span>
+      </div>
+      <div v-if="syncActionError" class="skills-sync-error">
+        {{ syncActionError }}
+      </div>
+      <div v-if="deviceLogin" class="skills-sync-device">
+        <span>{{ t('Open') }} <a :href="deviceLogin.verification_uri" target="_blank" rel="noreferrer">{{ t('GitHub device login') }}</a> {{ t('and enter code:') }}</span>
+        <code>{{ deviceLogin.user_code }}</code>
+      </div>
+      <div class="skills-sync-actions">
+        <button v-if="!syncStatus.loggedIn" class="skills-hub-sort" type="button" @click="startGithubFirebaseLogin">{{ t('Login with GitHub') }}</button>
+        <button v-if="!syncStatus.loggedIn" class="skills-hub-sort" type="button" @click="startGithubLogin">{{ t('Device Login') }}</button>
+        <button v-if="syncStatus.loggedIn" class="skills-hub-sort" type="button" @click="logoutGithub" :disabled="isSyncActionInFlight">{{ t('Logout GitHub') }}</button>
+        <button class="skills-hub-sort" type="button" @click="startupSkillsSync" :disabled="isSyncActionInFlight">{{ isStartupSyncInFlight ? t('Syncing...') : t('Startup Sync') }}</button>
+        <button class="skills-hub-sort" type="button" @click="pullSkillsSync" :disabled="isSyncActionInFlight">{{ isPullInFlight ? t('Pulling...') : t('Pull') }}</button>
+        <button v-if="syncStatus.loggedIn" class="skills-hub-sort" type="button" @click="pushSkillsSync" :disabled="!syncStatus.configured || isSyncActionInFlight">{{ isPushInFlight ? t('Pushing...') : t('Push') }}</button>
+      </div>
+    </div>
+
     <div v-if="toast" class="skills-hub-toast" :class="toastClass">{{ toast.text }}</div>
 
     <div class="skills-search-panel">
@@ -97,6 +141,7 @@ import { computed, onMounted, ref } from 'vue'
 import IconTablerChevronRight from '../icons/IconTablerChevronRight.vue'
 import SkillCard from './SkillCard.vue'
 import SkillDetailModal, { type HubSkill } from './SkillDetailModal.vue'
+import { useGithubSkillsSync } from '../../composables/useGithubSkillsSync'
 import { useUiLanguage } from '../../composables/useUiLanguage'
 
 const EMPTY_SKILL: HubSkill = { name: '', owner: '', description: '', url: '', installed: false }
@@ -138,6 +183,13 @@ const isDetailInstalling = computed(() =>
 const isDetailUninstalling = computed(() =>
   isUninstallActionInFlight.value && actionSkillKey.value === currentDetailSkillKey.value,
 )
+const githubRepoUrl = computed(() => {
+  if (!syncStatus.value.configured) return ''
+  const owner = syncStatus.value.repoOwner.trim()
+  const repo = syncStatus.value.repoName.trim()
+  if (!owner || !repo) return ''
+  return `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`
+})
 const filteredInstalled = computed(() => installedSkills.value)
 
 function showToast(text: string, type: 'success' | 'error' = 'success'): void {
@@ -280,6 +332,7 @@ async function handleToggleEnabled(skill: HubSkill, enabled: boolean): Promise<v
       body: JSON.stringify({ method: 'skills/config/write', params: { path: skill.path, enabled } }),
     })
     if (!resp.ok) throw new Error('Failed to update skill')
+    await fetch('/codex-api/skills-sync/push', { method: 'POST' })
     showToast(`${skill.displayName || skill.name} skill ${enabled ? 'enabled' : 'disabled'}`)
     await fetchSkills()
   } catch (e) {
@@ -303,8 +356,33 @@ function skillTryKey(skill: HubSkill): string {
   return `skill:${skill.name}:${skill.path ?? ''}`
 }
 
+const {
+  deviceLogin,
+  isPullInFlight,
+  isPushInFlight,
+  isStartupSyncInFlight,
+  isSyncActionInFlight,
+  loadSyncStatus,
+  logoutGithub,
+  pullSkillsSync,
+  pushSkillsSync,
+  startupSkillsSync,
+  startGithubFirebaseLogin,
+  startGithubLogin,
+  syncActionError,
+  syncActionStatus,
+  syncStatus,
+} = useGithubSkillsSync({
+  showToast,
+  onPulled: async () => {
+    await fetchSkills()
+    emit('skills-changed')
+  },
+})
+
 onMounted(() => {
   void fetchSkills()
+  void loadSyncStatus()
 })
 </script>
 
@@ -329,6 +407,38 @@ onMounted(() => {
 
 .skills-hub-sort {
   @apply shrink-0 rounded-lg border border-zinc-200 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-600 transition hover:bg-zinc-50 hover:border-zinc-300 cursor-pointer;
+}
+
+.skills-sync-panel {
+  @apply rounded-xl border border-zinc-200 bg-zinc-50 p-3 flex flex-col gap-2;
+}
+
+.skills-sync-header {
+  @apply flex flex-wrap items-center gap-2 text-sm text-zinc-700;
+}
+
+.skills-sync-badge {
+  @apply text-xs rounded-md border border-zinc-300 bg-white px-2 py-0.5;
+}
+
+.skills-sync-badge-link {
+  @apply text-zinc-700 hover:text-zinc-900 hover:border-zinc-400;
+}
+
+.skills-sync-device {
+  @apply text-xs text-zinc-600 flex items-center gap-2 flex-wrap;
+}
+
+.skills-sync-meta {
+  @apply text-xs text-zinc-600 flex items-center gap-3 flex-wrap;
+}
+
+.skills-sync-error {
+  @apply text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-2 py-1;
+}
+
+.skills-sync-actions {
+  @apply flex flex-wrap gap-2;
 }
 
 .skills-search-panel {
