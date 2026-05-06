@@ -436,6 +436,38 @@ Skills Sync aborts before `reset --hard` if local changes cannot be stashed firs
 
 ---
 
+### Skills sync restores untracked files after stash-pop conflict
+
+#### Feature/Change Name
+Skills Sync restores untracked local skill files when `git stash pop` conflicts on tracked files.
+
+#### Prerequisites/Setup
+1. Dev server running (`pnpm run dev --host 127.0.0.1 --port 5173`)
+2. GitHub Skills Sync is configured and connected
+3. `/Users/igor/.codex/skills` has an untracked local skill folder such as `feedback-triage/SKILL.md`
+4. Remote sync has a conflicting tracked edit such as a changed `installed-skills.json`
+5. Light theme and dark theme are available from the appearance switcher
+
+#### Steps
+1. In light theme, open `#/skills`.
+2. Create an untracked local skill folder under `/Users/igor/.codex/skills`.
+3. Make remote `installed-skills.json` differ so `git stash pop` conflicts during pull/startup sync.
+4. Click `Pull` or `Startup Sync`.
+5. Confirm sync resolves the tracked conflict and restores the untracked skill file from the stash.
+6. Confirm the restored skill file is included in the later skills repo commit/push path.
+7. Switch to dark theme and repeat steps 1 through 5.
+
+#### Expected Results
+- Untracked local skill files do not remain stranded only in `refs/stash`.
+- Restored untracked skill files are present in `/Users/igor/.codex/skills` after sync.
+- The next parent repo commit can stage and push the restored skill files.
+- The sync panel remains readable in light theme and dark theme.
+
+#### Rollback/Cleanup
+- Remove any test-only skill folder and restore remote manifest test edits.
+
+---
+
 ### Header Git branch dropdown with commit reset
 
 #### Feature/Change Name

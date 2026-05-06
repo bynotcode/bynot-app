@@ -915,9 +915,13 @@ async function ensureSkillsWorkingTreeRepo(repoUrl: string, branch: string): Pro
   const hasLocalChangesBeforePull = await hasLocalUncommittedChanges(localDir)
   const localMtimesBeforePull = hasLocalChangesBeforePull ? await snapshotFileMtimes(localDir) : new Map<string, number>()
   let createdAutostash = false
+  let autostashRef = ''
   try {
     const stashOutput = await runCommandWithOutput('git', ['stash', 'push', '--include-untracked', '-m', 'codex-skills-autostash'], { cwd: localDir })
     createdAutostash = !stashOutput.includes('No local changes to save')
+    if (createdAutostash) {
+      autostashRef = (await runCommandWithOutput('git', ['rev-parse', 'stash@{0}'], { cwd: localDir })).trim()
+    }
   } catch (error) {
     if (hasLocalChangesBeforePull) {
       throw new Error(`Refusing to reset skills repo because local changes could not be stashed first: ${getErrorMessage(error, 'git stash failed')}`)
@@ -932,6 +936,9 @@ async function ensureSkillsWorkingTreeRepo(repoUrl: string, branch: string): Pro
       await runCommand('git', ['stash', 'pop'], { cwd: localDir })
     } catch {
       await resolveStashPopConflictsByFileTime(localDir, localMtimesBeforePull, pulledMtimes)
+      if (autostashRef) {
+        await restoreMissingUntrackedFilesFromStash(localDir, autostashRef)
+      }
     }
   }
   return localDir
@@ -1052,6 +1059,22 @@ async function resolveStashPopConflictsByFileTime(
   const mergeHead = await readOptionalGitRef(repoDir, 'MERGE_HEAD')
   if (mergeHead) {
     await runCommand('git', ['commit', '-m', 'Auto-resolve stash-pop conflicts by file time'], { cwd: repoDir })
+  }
+}
+
+async function restoreMissingUntrackedFilesFromStash(repoDir: string, stashRef: string): Promise<void> {
+  let untrackedFiles = ''
+  try {
+    untrackedFiles = await runCommandWithOutput('git', ['ls-tree', '-r', '--name-only', `${stashRef}^3`], { cwd: repoDir })
+  } catch {
+    return
+  }
+  for (const filePath of untrackedFiles.split(/\r?\n/).map((row) => row.trim()).filter(Boolean)) {
+    try {
+      await stat(join(repoDir, filePath))
+      continue
+    } catch {}
+    await runCommand('git', ['checkout', `${stashRef}^3`, '--', filePath], { cwd: repoDir })
   }
 }
 
