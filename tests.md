@@ -342,40 +342,6 @@ The accidental `npx run dev` command starts the repository dev wrapper instead o
 #### Rollback/Cleanup
 - Stop any dev server process started for validation.
 
----
-
-### Skills sync idempotent commits and nested shared skills handling
-
-#### Feature/Change Name
-Skills Sync skips unchanged manifest writes and does not fail parent commits when only nested `shared_skills` content is dirty.
-
-#### Prerequisites/Setup
-1. Dev server running (`pnpm run dev --host 127.0.0.1 --port 5173`)
-2. GitHub Skills Sync is connected to a private skills sync repo
-3. `/Users/igor/.codex/skills/shared_skills` exists as a nested Git repository
-4. Light theme and dark theme are available from the appearance switcher
-
-#### Steps
-1. In light theme, open `#/skills`.
-2. Click `Startup Sync` when no installed skills manifest content has changed.
-3. Confirm the sync completes without adding a new `Update synced skills manifest` commit to the GitHub repo.
-4. Modify a file inside `/Users/igor/.codex/skills/shared_skills` without committing it inside that nested repository.
-5. Click `Push` or `Startup Sync` again.
-6. Confirm the sync does not show `Command failed (git commit -m Sync installed skills folder and manifest)` for the parent `/Users/igor/.codex/skills` repository.
-7. Confirm the startup auto-push path skips when the only local status is dirty nested `shared_skills` content and local `HEAD` equals `origin/main`.
-8. Switch to dark theme and repeat steps 1, 2, and 5.
-
-#### Expected Results
-- Unchanged `installed-skills.json` content is not written back to GitHub, so repeated empty-looking manifest commits are not created.
-- A dirty nested `shared_skills` repository does not make the parent skills sync fail with `no changes added to commit`.
-- Dirty nested `shared_skills` content alone does not keep triggering no-op startup push work.
-- Skills Sync status, errors, and action buttons remain readable in light theme and dark theme.
-
-#### Rollback/Cleanup
-- Revert or commit the intentional test edit inside `/Users/igor/.codex/skills/shared_skills`.
-
----
-
 ### Header Git branch dropdown with commit reset
 
 #### Feature/Change Name
@@ -1334,238 +1300,6 @@ Model, skill, thinking, and plan controls remain usable while a thread turn is i
 
 #### Rollback/Cleanup
 - No cleanup required.
-
-### Feature: Skills sync pull live-reloads installed skills list
-
-#### Prerequisites
-- App running from this repository with Skills Hub available.
-- GitHub skills sync configured and connected.
-- At least one skill update available in the sync source (new or edited skill metadata).
-
-#### Steps
-1. Open the app and note the currently visible installed skills for the active thread cwd.
-2. In Skills Hub, trigger `Pull` from GitHub sync.
-3. Wait for the pull success toast.
-4. Without restarting the app/server, navigate to thread composer skill picker and verify the installed skills list.
-5. Switch to another thread and back to force a normal UI refresh path.
-
-#### Expected Results
-- Pull completes successfully.
-- Installed skills list reflects pulled changes immediately without app/server restart.
-- Thread switch keeps showing the updated skills list (no stale cache rollback).
-
-#### Rollback/Cleanup
-- If needed, run another sync pull/push to restore previous skill state in the sync repo.
-
-### Feature: Force Refresh Skills button in Skills Sync panel
-
-#### Prerequisites
-- App running from this repository with Skills Hub route accessible.
-- At least one installed skill is available for the current thread cwd.
-
-#### Steps
-1. Open `Skills Hub`.
-2. In `Skills Sync (GitHub)`, click `Force Refresh Skills`.
-3. Verify button text changes to `Refreshing...` during the request and returns after completion.
-4. Verify success toast appears.
-5. Open the thread composer skills picker and confirm installed skills list is present and current.
-6. Switch to another thread and back to ensure refreshed list remains consistent.
-
-#### Expected Results
-- `Force Refresh Skills` triggers a manual refresh without requiring pull/push.
-- Loading state prevents duplicate clicks while refresh is in progress.
-- Installed skills list updates immediately and remains updated across thread switches.
-
-#### Rollback/Cleanup
-- No cleanup required.
-
-### Feature: SkillHub shows detailed skill load errors
-
-#### Prerequisites
-- App running from this repository.
-- At least one invalid installed skill file exists (for example unresolved merge markers in `SKILL.md`).
-
-#### Steps
-1. Open `Skills Hub`.
-2. Trigger `Force Refresh Skills`.
-3. Locate the `Some skills failed to load` panel above the skills sections.
-4. Verify each row shows:
-   - the failing `SKILL.md` path
-   - the exact parser error message from app server (for example invalid YAML line/column details).
-5. Fix the invalid skill file and trigger `Force Refresh Skills` again.
-
-#### Expected Results
-- SkillHub surfaces app-server load failures with detailed path and message.
-- Messages are specific enough to identify the broken file and parser failure reason.
-- Error panel disappears after invalid skills are fixed and refreshed.
-
-#### Rollback/Cleanup
-- Restore any intentionally broken local skill files used for testing.
-
-### Feature: Startup sync preserves local skill edits when remote is ahead
-
-#### Prerequisites
-- Skills sync configured to a private GitHub fork.
-- Local skills repo has a tracked edit in an existing skill file.
-- Remote `main` has at least one newer commit than local (simulate from another machine or commit directly on GitHub).
-
-#### Steps
-1. Edit a local skill file (for example update description text in `SKILL.md`) and keep the change.
-2. Trigger `Startup Sync` in Skills Hub.
-3. If a non-fast-forward condition exists, allow startup sync to complete retry path.
-4. Re-open the same local skill file and verify your edit remains.
-5. Trigger `Force Refresh Skills` and verify no unexpected skill removals occurred.
-
-#### Expected Results
-- Startup sync no longer fails with non-fast-forward push due to missing remote integration.
-- Local tracked skill edits remain after sync (not overwritten by remote state).
-- Sync path rebases/pulls with autostash and auto-resolves conflicts by mtime policy:
-  - choose remote (`theirs`) when remote file commit time is newer than local file mtime.
-  - choose local (`ours`) otherwise.
-- No manual conflict intervention is required during startup sync retries.
-
-#### Rollback/Cleanup
-- Revert test-only skill text changes if they were not intended to keep.
-
-### Feature: Startup sync conflict fallback when one side is missing
-
-#### Prerequisites
-- Skills sync repo contains a conflict candidate where only one side exists for a path (for example delete/modify scenario).
-- Skills Hub is accessible.
-
-#### Steps
-1. Open `Skills Hub`.
-2. Click `Startup Sync`.
-3. Wait for sync completion or error toast.
-4. Verify no toast/error contains `does not have our version`.
-
-#### Expected Results
-- Sync conflict resolver handles missing `--ours`/`--theirs` versions safely.
-- Startup sync does not fail with `git checkout --ours/--theirs` missing-version errors.
-
-#### Rollback/Cleanup
-- None.
-
-### Feature: Remote changes win when no local uncommitted skill edits exist
-
-#### Prerequisites
-- Skills sync configured with GitHub.
-- Local skills repo working tree is clean (`git status --porcelain` empty under skills dir).
-- Remote skills repo has newer commits touching existing skill files.
-
-#### Steps
-1. Confirm no local uncommitted changes in skills directory.
-2. Trigger `Startup Sync` in Skills Hub.
-3. After sync, inspect the skill file changed remotely.
-4. Trigger `Force Refresh Skills` and confirm loaded skill content matches remote update.
-
-#### Expected Results
-- Sync pull/reconcile does not preserve stale local file content when local tree is clean.
-- Remote updates are applied locally and remain after startup sync completes.
-
-#### Rollback/Cleanup
-- None.
-
-### Feature: Startup sync does not delete remote AGENTS.md
-
-#### Prerequisites
-- Skills sync configured to `friuns2/codexskills`.
-- Remote `main` contains `AGENTS.md`.
-- Local skills repo is clean before startup sync.
-
-#### Steps
-1. Confirm remote `AGENTS.md` exists on `main`.
-2. Confirm local `~/.codex/skills` is clean.
-3. Trigger `Startup Sync`.
-4. After completion, inspect latest commit created by sync (if any).
-5. Verify `AGENTS.md` still exists locally and in remote `origin/main`.
-
-#### Expected Results
-- Startup sync may update manifest, but must not delete `AGENTS.md`.
-- If sync creates a commit, changed files do not include `D AGENTS.md`.
-- Local and remote `AGENTS.md` hashes remain equal after sync.
-
-#### Rollback/Cleanup
-- None.
-
-### Feature: Bidirectional AGENTS.md sync via Startup Sync
-
-#### Prerequisites
-- Skills sync configured to `friuns2/codexskills`.
-- `~/.codex/skills` is a clean git working tree before each sub-test.
-- Skills Hub startup sync endpoint is reachable.
-
-#### Steps
-1. Remote -> Local:
-2. Add a unique marker to remote `AGENTS.md` on `main`.
-3. Confirm local `HEAD` is behind `origin/main`.
-4. Trigger `Startup Sync`.
-5. Verify local `AGENTS.md` contains the remote marker and local `HEAD == origin/main`.
-6. Local -> Remote:
-7. Add a different unique marker to local `~/.codex/skills/AGENTS.md`.
-8. Confirm local working tree shows `M AGENTS.md`.
-9. Trigger `Startup Sync`.
-10. Verify remote `origin/main:AGENTS.md` contains the local marker and local `HEAD == origin/main`.
-
-#### Expected Results
-- Remote-only AGENTS edits are pulled into local without deletion.
-- Local AGENTS edits are pushed to remote after startup sync.
-- After each sync direction, local and remote commit SHAs match.
-
-#### Rollback/Cleanup
-- Remove temporary test markers from `AGENTS.md` if required.
-
-### Feature: Mixed local+remote AGENTS edits do not stall Startup Sync
-
-#### Prerequisites
-- Skills sync configured and working.
-- Local skills repo clean before test start.
-
-#### Steps
-1. Add marker `A` to remote `AGENTS.md`.
-2. Add marker `B` to local `AGENTS.md` before syncing.
-3. Trigger `Startup Sync`.
-4. Wait for startup status to finish (`inProgress=false`).
-5. Verify sync outcome explicitly:
-6. If sync succeeds, local/remote SHAs match and expected merged marker result is present.
-7. If sync fails, status includes a concrete error message (not silent success).
-
-#### Expected Results
-- Startup sync must not report success while local remains behind remote.
-- No stale stash side-effects are introduced (no unexpected conflict from old stash entries).
-- Final state is either a valid synchronized result or an explicit failure status with actionable error.
-
-#### Rollback/Cleanup
-- Reset local skills repo to `origin/main` after test if needed.
-
-### Feature: Startup sync uses deterministic pull reconcile (`fetch + reset --hard`) before local replay
-
-#### Prerequisites
-- Skills sync is logged in and targets `friuns2/codexskills`.
-- Local repo path is `~/.codex/skills`.
-- Startup Sync endpoint is reachable at `/codex-api/skills-sync/startup-sync`.
-
-#### Steps
-1. Remote-only case:
-2. Commit a unique marker to remote `AGENTS.md` on `main`.
-3. Ensure local repo is clean and reset to `origin/main`, then trigger `Startup Sync`.
-4. Confirm marker appears locally and `HEAD == origin/main`.
-5. Local-only case:
-6. Add a unique local marker to `~/.codex/skills/AGENTS.md` (uncommitted), trigger `Startup Sync`.
-7. Confirm marker is pushed and `HEAD == origin/main` with clean worktree.
-8. Mixed case:
-9. Add local marker first, then commit a newer remote marker.
-10. Trigger `Startup Sync` and verify mtime policy result (newer remote marker wins, older local marker dropped).
-11. Confirm final state is clean with `HEAD == origin/main`.
-
-#### Expected Results
-- Startup sync does not fail with missing merge refs (`MERGE_HEAD`/`REBASE_HEAD`) in this path.
-- Remote-only changes are always pulled first and visible locally.
-- Local-only changes are preserved and pushed during the same startup sync run.
-- Mixed local+remote edits converge automatically with no manual conflict handling.
-
-#### Rollback/Cleanup
-- Remove temporary test markers from `AGENTS.md` if not needed.
 
 ### Feature: Revert Renat scrolling/input-layout behavior (without Fast mode changes)
 
@@ -4553,3 +4287,30 @@ Managed worktree threads remain visible under their matching canonical workspace
 
 #### Rollback/Cleanup
 - None.
+
+---
+
+### Remove GitHub skills sync from Skills Hub
+
+#### Feature/Change Name
+Skills Hub is local-only and no longer shows or triggers any GitHub skills sync workflow.
+
+#### Prerequisites/Setup
+1. Dev server running (`pnpm run dev --host 127.0.0.1 --port 4173`)
+2. At least one installed skill is available locally
+3. Light theme and dark theme are available from the appearance switcher
+
+#### Steps
+1. In light theme, open `#/skills`.
+2. Confirm there is no `Skills Sync (GitHub)` panel and no login, pull, push, or startup sync controls.
+3. Search for a skill and open an installed skill from the `Installed skills` section.
+4. Toggle the installed skill enabled state and confirm the UI updates without any sync-related error toast.
+5. Switch to dark theme and repeat steps 1, 2, and 4.
+
+#### Expected Results
+- Skills Hub only shows local installed-skill management and registry search UI.
+- No GitHub sync actions or status copy remain visible in light theme or dark theme.
+- Enabling or disabling a local skill still works after the sync feature removal.
+
+#### Rollback/Cleanup
+- Revert any installed-skill enablement change made during the test if needed.
