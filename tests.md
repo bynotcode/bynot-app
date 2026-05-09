@@ -3301,6 +3301,7 @@ When switching providers, the model dropdown should only show models from the ne
 - If `thread/resume` reports a model that is present in the active provider's model list, that thread shows and sends with the resumed model instead of the provider default
 - On direct `/thread/:id` startup, model preferences are loaded before thread resume so the resumed model is validated against the active provider list and is not dropped
 - If `thread/resume` reports a model outside the active provider's model list, the composer keeps the active provider default and does not save the invalid model for that provider
+- Sending from an existing Codex-started thread while the composer shows OpenRouter sends the visible OpenRouter model in `turn/start`, not the resumed Codex model
 - Switching back to OpenRouter shows only OpenRouter models again
 
 #### Rollback/Cleanup

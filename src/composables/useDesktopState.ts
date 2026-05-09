@@ -4605,6 +4605,7 @@ export function useDesktopState() {
     fileAttachments: FileAttachment[] = [],
     queueInsertIndex?: number,
     collaborationModeOverride?: CollaborationModeKind,
+    selectedModelOverride?: string,
   ): Promise<void> {
     if (isUpdatingSpeedMode.value) return
 
@@ -4654,6 +4655,7 @@ export function useDesktopState() {
         skills,
         fileAttachments,
         collaborationModeOverride,
+        selectedModelOverride,
       ).catch((unknownError) => {
         const errorMessage = unknownError instanceof Error ? unknownError.message : 'Unknown application error'
         setTurnErrorForThread(threadId, errorMessage)
@@ -4670,7 +4672,7 @@ export function useDesktopState() {
       {
         label: 'Thinking',
         details: buildPendingTurnDetails(
-          readModelIdForThread(threadId),
+          selectedModelOverride?.trim() || selectedModelId.value.trim() || readModelIdForActiveThreadSelection(threadId),
           selectedReasoningEffort.value,
           collaborationModeOverride === 'plan'
             ? 'plan'
@@ -4691,6 +4693,7 @@ export function useDesktopState() {
         skills,
         fileAttachments,
         collaborationModeOverride,
+        selectedModelOverride,
       )
     } catch (unknownError) {
       shouldAutoScrollOnNextAgentEvent = false
@@ -4803,6 +4806,7 @@ export function useDesktopState() {
     skills: Array<{ name: string; path: string }> = [],
     fileAttachments: FileAttachment[] = [],
     collaborationModeOverride?: CollaborationModeKind,
+    selectedModelOverride?: string,
   ): Promise<void> {
     const reasoningEffort = selectedReasoningEffort.value
     const collaborationMode = collaborationModeOverride === 'plan' ? 'plan' : collaborationModeOverride === 'default'
@@ -4837,7 +4841,7 @@ export function useDesktopState() {
         const resumedThread = await resumeThread(threadId)
         setResumedThreadModelIdForActiveProvider(threadId, resumedThread.model)
       }
-      const modelId = readModelIdForActiveThreadSelection(threadId)
+      const modelId = selectedModelOverride?.trim() || selectedModelId.value.trim() || readModelIdForActiveThreadSelection(threadId)
 
       let startedTurnId = ''
       try {
