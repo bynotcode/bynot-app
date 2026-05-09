@@ -1355,6 +1355,7 @@ const DICTATION_LANGUAGE_KEY = 'codex-web-local.dictation-language.v1'
 
 const CHAT_WIDTH_KEY = 'codex-web-local.chat-width.v1'
 const MOBILE_RESUME_RELOAD_MIN_HIDDEN_MS = 400
+const THREAD_NOTIFICATION_CLICK_EVENT = 'codex-thread-notification-click'
 const sendWithEnter = ref(loadBoolPref(SEND_WITH_ENTER_KEY, true))
 const inProgressSendMode = ref<'steer' | 'queue'>(loadInProgressSendModePref())
 const darkMode = ref<'system' | 'light' | 'dark'>(loadDarkModePref())
@@ -1807,6 +1808,7 @@ onMounted(() => {
   refreshBrowserNotificationPermission()
   document.addEventListener('pointerdown', onDocumentPointerDown)
   window.addEventListener('keydown', onWindowKeyDown)
+  window.addEventListener(THREAD_NOTIFICATION_CLICK_EVENT, onThreadNotificationClick)
   document.addEventListener('visibilitychange', onDocumentVisibilityChange)
   window.addEventListener('pageshow', onWindowPageShow)
   window.addEventListener('focus', onWindowFocus)
@@ -1831,6 +1833,7 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('pointerdown', onDocumentPointerDown)
   window.removeEventListener('keydown', onWindowKeyDown)
+  window.removeEventListener(THREAD_NOTIFICATION_CLICK_EVENT, onThreadNotificationClick)
   document.removeEventListener('visibilitychange', onDocumentVisibilityChange)
   window.removeEventListener('pageshow', onWindowPageShow)
   window.removeEventListener('focus', onWindowFocus)
@@ -3924,6 +3927,23 @@ async function initialize(): Promise<void> {
 function threadExistsInSidebar(threadId: string): boolean {
   if (!threadId) return false
   return projectGroups.value.some((group) => group.threads.some((thread) => thread.id === threadId))
+}
+
+function readThreadIdFromNotificationEvent(event: Event): string {
+  if (!(event instanceof CustomEvent)) return ''
+  const detail = event.detail
+  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) return ''
+  const threadId = (detail as Record<string, unknown>).threadId
+  return typeof threadId === 'string' ? threadId.trim() : ''
+}
+
+function onThreadNotificationClick(event: Event): void {
+  const threadId = readThreadIdFromNotificationEvent(event)
+  if (!threadId) return
+  void (async () => {
+    await selectThread(threadId)
+    await router.replace({ name: 'thread', params: { threadId } })
+  })()
 }
 
 async function syncThreadSelectionWithRoute(): Promise<void> {

@@ -96,6 +96,7 @@ const BROWSER_NOTIFICATIONS_STORAGE_KEY = 'codex-web-local.browser-notifications
 export type ProjectSortMode = 'recent' | 'manual'
 
 type BrowserNotificationPermission = NotificationPermission | 'unsupported'
+const THREAD_NOTIFICATION_CLICK_EVENT = 'codex-thread-notification-click'
 
 function loadReadStateMap(): Record<string, string> {
   if (typeof window === 'undefined') return {}
@@ -2129,16 +2130,20 @@ export function useDesktopState() {
     if (!hasBrowserNotificationSupport()) return
 
     const { threadId, ...notificationOptions } = options
-    const notification = new window.Notification(title, {
-      icon: '/icons/pwa-192x192.png',
-      ...notificationOptions,
-    })
-    notification.onclick = () => {
-      window.focus()
-      if (threadId && threadId !== GLOBAL_SERVER_REQUEST_SCOPE) {
-        setSelectedThreadId(threadId)
+    try {
+      const notification = new window.Notification(title, {
+        icon: '/icons/pwa-192x192.png',
+        ...notificationOptions,
+      })
+      notification.onclick = () => {
+        window.focus()
+        if (threadId && threadId !== GLOBAL_SERVER_REQUEST_SCOPE) {
+          window.dispatchEvent(new CustomEvent(THREAD_NOTIFICATION_CLICK_EVENT, { detail: { threadId } }))
+        }
+        notification.close()
       }
-      notification.close()
+    } catch {
+      // Browser notification construction can still fail after permission checks.
     }
   }
 
