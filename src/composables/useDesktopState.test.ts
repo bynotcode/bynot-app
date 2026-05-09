@@ -601,13 +601,13 @@ describe('model selection', () => {
     expect(state.readModelIdForThread('thread-b')).toBe('big-pickle')
   })
 
-  it('ignores stale Codex model ids saved under a non-Codex provider thread key', async () => {
+  it('accepts gpt-prefixed model ids saved under a custom provider thread key', async () => {
     installTestWindow({
       'codex-web-local.selected-thread-id.v1': 'thread-a',
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
         'thread-a': 'gpt-5.5',
-        '__new-thread-provider__::opencode-zen': 'big-pickle',
-        '__thread-provider__::opencode-zen::thread-b': 'gpt-5.4',
+        '__new-thread-provider__::custom-endpoint': 'gpt-custom-default',
+        '__thread-provider__::custom-endpoint::thread-b': 'gpt-custom-thread',
       }),
     })
     gatewayMocks.getThreadGroupsPage.mockResolvedValue({
@@ -622,10 +622,10 @@ describe('model selection', () => {
       ],
       nextCursor: null,
     })
-    gatewayMocks.getAvailableModelIds.mockResolvedValue(['big-pickle', 'zen-model', 'gpt-5.4'])
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-custom-default', 'gpt-custom-thread'])
     gatewayMocks.getCurrentModelConfig.mockResolvedValue({
-      model: 'big-pickle',
-      providerId: 'opencode-zen',
+      model: 'gpt-custom-default',
+      providerId: 'custom-endpoint',
       reasoningEffort: 'high',
       speedMode: 'standard',
     })
@@ -638,13 +638,13 @@ describe('model selection', () => {
     await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
     state.primeSelectedThread('thread-b')
 
-    expect(state.selectedModelId.value).toBe('big-pickle')
-    expect(state.readModelIdForThread('thread-b')).toBe('big-pickle')
+    expect(state.selectedModelId.value).toBe('gpt-custom-thread')
+    expect(state.readModelIdForThread('thread-b')).toBe('gpt-custom-thread')
 
-    state.setSelectedModelIdForThread('thread-b', 'zen-model')
+    state.setSelectedModelIdForThread('thread-b', 'gpt-custom-default')
 
-    expect(state.selectedModelId.value).toBe('zen-model')
-    expect(state.readModelIdForThread('thread-b')).toBe('zen-model')
+    expect(state.selectedModelId.value).toBe('gpt-custom-default')
+    expect(state.readModelIdForThread('thread-b')).toBe('gpt-custom-default')
   })
 
   it('resumes the selected thread again after switching providers before sending', async () => {

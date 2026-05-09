@@ -153,10 +153,6 @@ function normalizeStoredModelId(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function isCodexBuiltinModelId(modelId: string): boolean {
-  return modelId.trim().toLowerCase().startsWith('gpt-')
-}
-
 function createStringKeyedRecord<T>(): Record<string, T> {
   return Object.create(null) as Record<string, T>
 }
@@ -1594,7 +1590,7 @@ export function useDesktopState() {
         const providerModelId = providerContextId
           ? normalizeStoredModelId(selectedModelIdByContext.value[providerContextId])
           : ''
-        if (providerThreadModelId && !isCodexBuiltinModelId(providerThreadModelId)) return providerThreadModelId
+        if (providerThreadModelId) return providerThreadModelId
         return providerModelId
       }
       if (providerThreadModelId) return providerThreadModelId

@@ -5081,6 +5081,35 @@ Changing the Provider dropdown refreshes the model list and selects the provider
 
 ---
 
+### Custom provider keeps gpt-prefixed model selections
+
+#### Feature/Change Name
+Custom endpoints can use provider-scoped `gpt-*` model IDs without being treated as stale Codex built-in selections.
+
+#### Prerequisites/Setup
+1. Dev server running (`pnpm run dev`)
+2. A custom endpoint is configured whose `/models` response includes a `gpt-*` model ID
+3. Light theme and dark theme both available from the appearance switcher
+
+#### Steps
+1. In light theme, open Settings and set Provider to `Custom endpoint`.
+2. Configure the custom endpoint URL/API key and confirm the composer model dropdown includes the custom `gpt-*` model.
+3. Select that custom `gpt-*` model on an existing thread.
+4. Switch to another thread, then return to the original thread.
+5. Confirm the original thread still shows the selected custom `gpt-*` model instead of falling back to the custom provider default.
+6. Switch to dark theme and repeat steps 2-5.
+
+#### Expected Results
+- Provider-scoped custom endpoint thread model selections are preserved even when the model ID starts with `gpt-`.
+- Legacy non-provider-scoped Codex model selections still do not leak into non-Codex providers.
+- The model dropdown remains readable and usable in light and dark themes.
+
+#### Rollback/Cleanup
+- Switch Provider back to the preferred default after testing.
+- Clear custom endpoint credentials if they were only used for this test.
+
+---
+
 ### Worktree creation persists across refresh
 
 #### Feature/Change Name
