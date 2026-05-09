@@ -27,6 +27,7 @@ import {
   createDefaultOpenCodeZenFreeModeState,
   getFreeModeConfigArgs,
   getFreeModeEnvVars,
+  getOpenCodeZenFreeModelIds,
   OPENCODE_ZEN_DEFAULT_MODEL,
   shouldCreateDefaultFreeModeStateForMissingAuth,
   type FreeModeState,
@@ -6118,22 +6119,29 @@ export function createCodexBridgeMiddleware(options: CodexBridgeOptions = {}): C
               try {
                 const modelsUrl = 'https://opencode.ai/zen/v1/models'
                 const headers: Record<string, string> = {}
-                if (fmState.apiKey && fmState.apiKey !== 'dummy') {
+                const hasZenApiKey = Boolean(fmState.apiKey && fmState.apiKey !== 'dummy')
+                if (hasZenApiKey) {
                   headers['Authorization'] = `Bearer ${fmState.apiKey}`
                 }
                 const resp = await fetch(modelsUrl, { headers, signal: AbortSignal.timeout(8000) })
                 if (resp.ok) {
                   const json = await resp.json() as { data?: Array<{ id: string }> }
                   const allIds = (json.data ?? []).map(m => m.id).filter(Boolean)
-                  const freeIds = allIds.filter(id => id.endsWith('-free') || id === 'big-pickle')
-                  const paidIds = allIds.filter(id => !id.endsWith('-free') && id !== 'big-pickle')
-                  setJson(res, 200, { data: [...freeIds, ...paidIds], exclusive: true, source: 'opencode-zen' })
+                  setJson(res, 200, {
+                    data: getOpenCodeZenFreeModelIds(allIds),
+                    exclusive: true,
+                    source: 'opencode-zen',
+                  })
                   return
                 }
               } catch {
                 // OpenCode Zen model fetch failed
               }
-              setJson(res, 200, { data: ['big-pickle', 'minimax-m2.5-free', 'nemotron-3-super-free', 'trinity-large-preview-free'], exclusive: true, source: 'opencode-zen' })
+              setJson(res, 200, {
+                data: getOpenCodeZenFreeModelIds([]),
+                exclusive: true,
+                source: 'opencode-zen',
+              })
               return
             }
             if (fmState.provider === 'custom' && fmState.customBaseUrl) {

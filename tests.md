@@ -287,11 +287,13 @@ The composer model dropdown loads provider-specific models during normal backgro
 3. Confirm the selected model is `big-pickle`.
 4. Open the model dropdown.
 5. Confirm Zen models such as `big-pickle`, `minimax-m2.5-free`, and other `*-free` entries can be found in the dropdown search.
-6. Switch to dark theme and repeat steps 1-5.
+6. Confirm paid GPT-labelled Zen models are not shown in the built-in OpenCode Zen dropdown.
+7. Switch to dark theme and repeat steps 1-6.
 
 #### Expected Results
 - Normal page load fetches provider models for the active provider.
 - The dropdown is not limited to stale Codex RPC model results plus `big-pickle`.
+- The built-in OpenCode Zen provider shows only no-key-compatible/default models, even if a key is saved locally.
 - Model dropdown remains usable in light and dark themes.
 
 #### Rollback/Cleanup
