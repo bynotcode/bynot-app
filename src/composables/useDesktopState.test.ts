@@ -560,7 +560,7 @@ describe('model selection', () => {
     expect(state.readModelIdForThread('thread-a')).toBe('big-pickle')
   })
 
-  it('uses the provider default when selecting an existing thread without a provider model', async () => {
+  it('keeps existing thread model empty without a provider-scoped thread model', async () => {
     installTestWindow({
       'codex-web-local.selected-thread-id.v1': 'thread-a',
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
@@ -597,8 +597,8 @@ describe('model selection', () => {
     await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
     state.primeSelectedThread('thread-b')
 
-    expect(state.selectedModelId.value).toBe('big-pickle')
-    expect(state.readModelIdForThread('thread-b')).toBe('big-pickle')
+    expect(state.selectedModelId.value).toBe('')
+    expect(state.readModelIdForThread('thread-b')).toBe('')
   })
 
   it('accepts gpt-prefixed model ids saved under a custom provider thread key', async () => {
@@ -787,7 +787,7 @@ describe('model selection', () => {
     installTestWindow({
       'codex-web-local.selected-thread-id.v1': 'thread-a',
       'codex-web-local.selected-model-by-context.v1': JSON.stringify({
-        'thread-a': 'gpt-5.3-codex-spark',
+        '__thread-provider__::codex::thread-a': 'gpt-5.3-codex-spark',
         '__thread-provider__::opencode-zen::thread-a': 'big-pickle',
         '__new-thread-provider__::opencode-zen': 'big-pickle',
       }),

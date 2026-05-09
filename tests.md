@@ -382,16 +382,16 @@ Model selection is saved per existing thread and per active provider, so switchi
 1. In light theme, select an existing thread.
 2. With Provider set to `Codex`, select a Codex model such as `GPT-5.5`.
 3. Open Settings and switch Provider to `OpenCode Zen`.
-4. Confirm the same thread's model dropdown changes to a Zen model such as `big-pickle`.
-5. Select another Zen model if available.
+4. Confirm the same thread's model dropdown does not reuse the previous Codex model.
+5. Select a Zen model such as `big-pickle`.
 6. Switch Provider back to `Codex`.
 7. Confirm the same thread's model dropdown restores the Codex model instead of keeping the Zen model.
 8. Switch to dark theme and repeat steps 1-7.
 
 #### Expected Results
 - Existing thread model selections are keyed by thread and provider.
-- Existing threads without a saved model for the active non-Codex provider use that provider's configured/default model instead of a legacy Codex model.
-- Stale Codex `gpt-*` model ids accidentally saved under a non-Codex provider key are ignored until the user explicitly selects a valid non-Codex model.
+- Existing threads without a saved model for the active provider do not use a legacy thread/default localStorage fallback.
+- Provider-scoped model ids are accepted as-is for the active provider.
 - The Codex provider model dropdown shows only Codex models and does not include stale provider models such as `big-pickle`.
 - New-thread provider-scoped model behavior remains unchanged.
 - Model dropdown labels and menus remain readable in light and dark themes.
@@ -5096,12 +5096,12 @@ Custom endpoints can use provider-scoped `gpt-*` model IDs without being treated
 2. Configure the custom endpoint URL/API key and confirm the composer model dropdown includes the custom `gpt-*` model.
 3. Select that custom `gpt-*` model on an existing thread.
 4. Switch to another thread, then return to the original thread.
-5. Confirm the original thread still shows the selected custom `gpt-*` model instead of falling back to the custom provider default.
+5. Confirm the original thread still shows the selected custom `gpt-*` model.
 6. Switch to dark theme and repeat steps 2-5.
 
 #### Expected Results
 - Provider-scoped custom endpoint thread model selections are preserved even when the model ID starts with `gpt-`.
-- Legacy non-provider-scoped Codex model selections still do not leak into non-Codex providers.
+- Legacy non-provider-scoped model selections are not read for any provider.
 - The model dropdown remains readable and usable in light and dark themes.
 
 #### Rollback/Cleanup
