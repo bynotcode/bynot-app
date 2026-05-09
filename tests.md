@@ -3299,6 +3299,7 @@ When switching providers, the model dropdown should only show models from the ne
 - If the backend reports the Codex provider as `openai`, the composer still uses the `Codex` provider selection and shows a real Codex model, not the `Model` placeholder
 - Existing threads without a provider-thread model still show the active provider's saved/default model in the composer rather than the `Model` placeholder
 - If `thread/resume` reports a model that is present in the active provider's model list, that thread shows and sends with the resumed model instead of the provider default
+- On direct `/thread/:id` startup, model preferences are loaded before thread resume so the resumed model is validated against the active provider list and is not dropped
 - If `thread/resume` reports a model outside the active provider's model list, the composer keeps the active provider default and does not save the invalid model for that provider
 - Switching back to OpenRouter shows only OpenRouter models again
 

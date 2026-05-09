@@ -779,6 +779,51 @@ describe('model selection', () => {
     )
   })
 
+  it('loads provider models before resuming selected thread on startup', async () => {
+    installTestWindow({
+      'codex-web-local.selected-thread-id.v1': 'thread-a',
+      'codex-web-local.selected-model-by-context.v1': JSON.stringify({
+        '__new-thread-provider__::openrouter': 'openrouter/free',
+      }),
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [
+        {
+          projectName: 'project',
+          threads: [thread('thread-a', '/tmp/project')],
+        },
+      ],
+      nextCursor: null,
+    })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['openrouter/free', 'openrouter/other'])
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'openrouter/free',
+      providerId: 'openrouter',
+      reasoningEffort: 'high',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAccountRateLimits.mockResolvedValue([])
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.resumeThread.mockImplementation(async () => {
+      expect(state.availableModelIds.value).toEqual(['openrouter/free', 'openrouter/other'])
+      return {
+        model: 'openrouter/other',
+        messages: [],
+        inProgress: false,
+        activeTurnId: '',
+        turnIndexByTurnId: {},
+      }
+    })
+
+    const state = useDesktopState()
+
+    await state.refreshAll({ includeSelectedThreadMessages: true })
+
+    expect(state.readModelIdForThread('thread-a')).toBe('openrouter/other')
+    expect(state.selectedModelId.value).toBe('openrouter/other')
+  })
+
   it('accepts gpt-prefixed model ids saved under a custom provider thread key', async () => {
     installTestWindow({
       'codex-web-local.selected-thread-id.v1': 'thread-a',

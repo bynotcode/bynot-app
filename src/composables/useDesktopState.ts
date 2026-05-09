@@ -4387,6 +4387,10 @@ export function useDesktopState() {
       await loadPersistedQueueStateIfNeeded()
       await loadThreads()
       if (includeSelectedThreadMessages) {
+        await refreshModelPreferences({
+          providerChanged: options.providerChanged,
+          includeProviderModels: options.providerChanged === true || awaitAncillaryRefreshes,
+        })
         await loadMessages(selectedThreadId.value)
       }
       if (awaitAncillaryRefreshes) {
