@@ -1070,6 +1070,38 @@ function getWorkspaceProjectOrderNames(
   })
 }
 
+function getWorkspacePinnedProjectNames(
+  rootsState: WorkspaceRootsState | null,
+  duplicateLeafNames: Set<string>,
+): string[] {
+  if (!rootsState) return []
+  const remoteProjectsById = getRemoteProjectById(rootsState)
+  return (rootsState.pinnedProjectIds ?? []).map((projectId) => {
+    if (remoteProjectsById.has(projectId)) return projectId
+    const normalizedRootPath = normalizePathForUi(projectId).trim()
+    const leafName = toProjectNameFromWorkspaceRoot(normalizedRootPath)
+    return duplicateLeafNames.has(leafName) ? normalizedRootPath : leafName
+  }).filter((name) => name.length > 0)
+}
+
+function orderGroupsWithPinnedProjects(
+  groups: UiProjectGroup[],
+  pinnedProjectNames: string[],
+): UiProjectGroup[] {
+  if (pinnedProjectNames.length === 0) return groups
+  const pinnedIndexByName = new Map(pinnedProjectNames.map((name, index) => [name, index]))
+  return [...groups].sort((first, second) => {
+    const firstPinnedIndex = pinnedIndexByName.get(first.projectName)
+    const secondPinnedIndex = pinnedIndexByName.get(second.projectName)
+    if (firstPinnedIndex !== undefined && secondPinnedIndex !== undefined) {
+      return firstPinnedIndex - secondPinnedIndex
+    }
+    if (firstPinnedIndex !== undefined) return -1
+    if (secondPinnedIndex !== undefined) return 1
+    return 0
+  })
+}
+
 function matchesWorkspaceRootProject(rootPath: string, projectName: string): boolean {
   const normalizedRootPath = normalizePathForUi(rootPath).trim()
   return normalizedRootPath === projectName || toProjectNameFromWorkspaceRoot(rootPath) === projectName
@@ -1163,15 +1195,17 @@ function orderGroupsByWorkspaceProjectOrder(
   duplicateLeafNames: Set<string>,
 ): UiProjectGroup[] {
   const order = getWorkspaceProjectOrderNames(rootsState, duplicateLeafNames)
-  if (order.length === 0) return groups
+  const pinnedProjectNames = getWorkspacePinnedProjectNames(rootsState, duplicateLeafNames)
+  if (order.length === 0) return orderGroupsWithPinnedProjects(groups, pinnedProjectNames)
   const orderIndexByName = new Map(order.map((name, index) => [name, index]))
-  return [...groups].sort((first, second) => {
+  const orderedGroups = [...groups].sort((first, second) => {
     if (isProjectlessGroup(first) || isProjectlessGroup(second)) return 0
     const firstIndex = orderIndexByName.get(first.projectName) ?? Number.POSITIVE_INFINITY
     const secondIndex = orderIndexByName.get(second.projectName) ?? Number.POSITIVE_INFINITY
     if (firstIndex === secondIndex) return 0
     return firstIndex - secondIndex
   })
+  return orderGroupsWithPinnedProjects(orderedGroups, pinnedProjectNames)
 }
 
 function collectDuplicateProjectLeafNames(groups: UiProjectGroup[], rootsState: WorkspaceRootsState | null): Set<string> {
@@ -1390,6 +1424,7 @@ export function useDesktopState() {
   const readStateByThreadId = ref<Record<string, string>>(loadReadStateMap())
   const unreadCutoffIso = ref(loadUnreadCutoffIso())
   const projectOrder = ref<string[]>(loadProjectOrder())
+  const pinnedProjectNames = ref<string[]>([])
   const projectDisplayNameById = ref<Record<string, string>>(loadProjectDisplayNames())
   const loadedVersionByThreadId = ref<Record<string, string>>({})
   const loadedMessagesByThreadId = ref<Record<string, boolean>>({})
@@ -3943,6 +3978,8 @@ export function useDesktopState() {
 
   function applyThreadGroups(groups: UiProjectGroup[], rootsState: WorkspaceRootsState | null): void {
     const visibleGroups = filterGroupsByWorkspaceRoots(groups, rootsState)
+    const duplicateLeafNames = collectDuplicateProjectLeafNames(groups, rootsState)
+    pinnedProjectNames.value = getWorkspacePinnedProjectNames(rootsState, duplicateLeafNames)
     const hasWorkspaceRootsState = Boolean(
       rootsState && (rootsState.order.length > 0 || rootsState.projectOrder.length > 0 || (rootsState.remoteProjects ?? []).length > 0),
     )
@@ -3960,7 +3997,10 @@ export function useDesktopState() {
       }
     }
 
-    const orderedGroups = orderGroupsByProjectOrder(visibleGroups, projectOrder.value)
+    const orderedGroups = orderGroupsWithPinnedProjects(
+      orderGroupsByProjectOrder(visibleGroups, projectOrder.value),
+      pinnedProjectNames.value,
+    )
     markServerListedThreads(new Set(flattenThreads(orderedGroups).map((thread) => thread.id)))
     const mergedWithInProgress = mergeIncomingWithLocalInProgressThreads(
       sourceGroups.value,
@@ -4962,6 +5002,7 @@ export function useDesktopState() {
           labels: nextLabels,
           active: rootsState.active,
           projectOrder: rootsState.projectOrder,
+          pinnedProjectIds: rootsState.pinnedProjectIds ?? [],
         })
       }
     } catch {
@@ -5039,6 +5080,7 @@ export function useDesktopState() {
           labels: omitKeys(rootsState.labels, removedRootPaths),
           active: fallbackActive,
           projectOrder: rootsState.projectOrder.filter((item) => item !== projectName && !removedRootPaths.has(item)),
+          pinnedProjectIds: (rootsState.pinnedProjectIds ?? []).filter((item) => item !== projectName && !removedRootPaths.has(item)),
         })
         return
       } catch {
@@ -5085,6 +5127,61 @@ export function useDesktopState() {
     void persistProjectOrderToWorkspaceRoots()
   }
 
+  function resolveProjectPinnedId(rootsState: WorkspaceRootsState, projectName: string): string {
+    const normalizedName = normalizePathForUi(projectName).trim()
+    if (!normalizedName) return ''
+    if ((rootsState.remoteProjects ?? []).some((project) => project.id === normalizedName)) return normalizedName
+    for (const rootPath of rootsState.order) {
+      if (matchesWorkspaceRootProject(rootPath, normalizedName)) return rootPath
+    }
+    const group = sourceGroups.value.find((item) => item.projectName === normalizedName)
+    const cwd = group?.threads[0]?.cwd?.trim() ?? ''
+    return cwd || normalizedName
+  }
+
+  function applyPinnedProjectNamesFromRootsState(rootsState: WorkspaceRootsState | null, groups: UiProjectGroup[] = sourceGroups.value): void {
+    const duplicateLeafNames = collectDuplicateProjectLeafNames(groups, rootsState)
+    pinnedProjectNames.value = getWorkspacePinnedProjectNames(rootsState, duplicateLeafNames)
+  }
+
+  function isProjectPinned(projectName: string): boolean {
+    return pinnedProjectNames.value.includes(projectName)
+  }
+
+  async function setProjectPinned(projectName: string, pinned: boolean): Promise<void> {
+    const normalizedName = normalizePathForUi(projectName).trim()
+    if (!normalizedName) return
+
+    try {
+      const rootsState = await getWorkspaceRootsState()
+      const pinnedProjectId = resolveProjectPinnedId(rootsState, normalizedName)
+      if (!pinnedProjectId) return
+      const currentPinnedProjectIds = rootsState.pinnedProjectIds ?? []
+      const nextPinnedProjectIds = pinned
+        ? [pinnedProjectId, ...currentPinnedProjectIds.filter((item) => item !== pinnedProjectId)]
+        : currentPinnedProjectIds.filter((item) => item !== pinnedProjectId)
+
+      if (areStringArraysEqual(currentPinnedProjectIds, nextPinnedProjectIds)) return
+
+      await setWorkspaceRootsState({
+        order: rootsState.order,
+        labels: rootsState.labels,
+        active: rootsState.active,
+        projectOrder: rootsState.projectOrder,
+        pinnedProjectIds: nextPinnedProjectIds,
+      })
+
+      const nextRootsState: WorkspaceRootsState = {
+        ...rootsState,
+        pinnedProjectIds: nextPinnedProjectIds,
+      }
+      applyPinnedProjectNamesFromRootsState(nextRootsState)
+      applyThreadGroups(sourceGroups.value, nextRootsState)
+    } catch (unknownError) {
+      error.value = unknownError instanceof Error ? unknownError.message : 'Failed to update pinned project'
+    }
+  }
+
   async function persistProjectOrderToWorkspaceRoots(): Promise<void> {
     try {
       const rootsState = await getWorkspaceRootsState()
@@ -5095,6 +5192,7 @@ export function useDesktopState() {
         labels: rootsState.labels,
         active: nextState.active,
         projectOrder: nextState.projectOrder,
+        pinnedProjectIds: rootsState.pinnedProjectIds ?? [],
       })
     } catch {
       // Keep local project order when global state persistence is unavailable.
@@ -5345,6 +5443,7 @@ export function useDesktopState() {
 
   return {
     projectGroups,
+    pinnedProjectNames,
     projectDisplayNameById,
     selectedThread,
     selectedThreadTokenUsage,
@@ -5403,6 +5502,8 @@ export function useDesktopState() {
     removeProject,
     reorderProject,
     pinProjectToTop,
+    isProjectPinned,
+    setProjectPinned,
     startPolling,
     stopPolling,
     primeSelectedThread,

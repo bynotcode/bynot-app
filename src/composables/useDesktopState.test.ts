@@ -166,6 +166,36 @@ describe('filterGroupsByWorkspaceRoots', () => {
     ])
   })
 
+  it('places Codex pinned projects before regular project order', () => {
+    const groups: UiProjectGroup[] = [
+      {
+        projectName: 'alpha',
+        threads: [thread('alpha-chat', '/tmp/alpha')],
+      },
+      {
+        projectName: 'beta',
+        threads: [thread('beta-chat', '/tmp/beta')],
+      },
+      {
+        projectName: 'gamma',
+        threads: [thread('gamma-chat', '/tmp/gamma')],
+      },
+    ]
+    const rootsState: WorkspaceRootsState = {
+      order: ['/tmp/alpha', '/tmp/beta', '/tmp/gamma'],
+      labels: {},
+      active: ['/tmp/alpha'],
+      projectOrder: ['/tmp/beta', '/tmp/alpha', '/tmp/gamma'],
+      pinnedProjectIds: ['/tmp/gamma'],
+    }
+
+    expect(filterGroupsByWorkspaceRoots(groups, rootsState).map((group) => group.projectName)).toEqual([
+      'gamma',
+      'beta',
+      'alpha',
+    ])
+  })
+
   it('keeps empty duplicate workspace roots visible in Codex project order', () => {
     const groups: UiProjectGroup[] = [
       {

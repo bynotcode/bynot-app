@@ -271,6 +271,38 @@ This file tracks manual regression and feature verification steps.
 
 ---
 
+### Sidebar project pinning
+
+#### Feature/Change Name
+Project rows can be pinned and unpinned from the sidebar action menu using Codex.app-compatible `pinned-project-ids` state.
+
+#### Prerequisites/Setup
+1. Dev server running (`pnpm run dev`)
+2. Sidebar contains at least three visible projects
+3. Light theme and dark theme both available from the appearance switcher
+
+#### Steps
+1. In light theme, open the sidebar Projects section.
+2. Open a non-top project action menu and click `Pin project`.
+3. Confirm the project moves above the regular projects and its action menu now shows `Unpin project`.
+4. Refresh the browser tab and confirm the pinned project remains above regular projects.
+5. Inspect `~/.codex/.codex-global-state.json` and confirm `pinned-project-ids` contains the pinned project root or remote project id.
+6. Open the pinned project action menu and click `Unpin project`.
+7. Confirm the project returns to its normal `project-order` position and `pinned-project-ids` no longer contains that project.
+8. Switch to dark theme and repeat steps 2-7 with a different project.
+
+#### Expected Results
+- Project action menus expose `Pin project` for unpinned projects and `Unpin project` for pinned projects.
+- Pinned projects render before non-pinned projects without rewriting the saved `project-order`.
+- Pin and unpin persist through `/codex-api/workspace-roots-state` and Codex global state.
+- Duplicate folder-name projects and remote project rows pin the intended project id.
+- Project menu items and row controls remain readable in light and dark themes.
+
+#### Rollback/Cleanup
+- Unpin any projects pinned during verification.
+
+---
+
 ### Startup avoids duplicate setup probes
 
 #### Feature/Change Name

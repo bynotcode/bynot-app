@@ -316,6 +316,9 @@
                       <button class="project-menu-item" type="button" @click="onBrowseProjectFiles(group.projectName)">
                         Browse files
                       </button>
+                      <button class="project-menu-item" type="button" @click="onToggleProjectPinned(group.projectName)">
+                        {{ isProjectPinned(group.projectName) ? 'Unpin project' : 'Pin project' }}
+                      </button>
                       <button
                         v-if="projectGitRepoByName[group.projectName]"
                         class="project-menu-item"
@@ -828,6 +831,7 @@ const props = defineProps<{
   groups: UiProjectGroup[]
   projectDisplayNameById: Record<string, string>
   projectGitRepoByName: Record<string, boolean>
+  pinnedProjectNames: string[]
   selectedThreadId: string
   isLoading: boolean
   searchQuery: string
@@ -843,6 +847,7 @@ const emit = defineEmits<{
   'browse-thread-files': [threadId: string]
   'browse-project-files': [projectName: string]
   'request-project-git-status': [projectName: string]
+  'set-project-pinned': [payload: { projectName: string; pinned: boolean }]
   'create-project-worktree': [projectName: string]
   'rename-project': [payload: { projectName: string; displayName: string }]
   'rename-thread': [payload: { threadId: string; title: string }]
@@ -1821,6 +1826,10 @@ function isProjectMenuOpen(projectName: string): boolean {
   return openProjectMenuId.value === projectName
 }
 
+function isProjectPinned(projectName: string): boolean {
+  return props.pinnedProjectNames.includes(projectName)
+}
+
 function closeProjectMenu(): void {
   openProjectMenuId.value = ''
   projectMenuMode.value = 'actions'
@@ -1896,6 +1905,14 @@ function openRenameProjectMenu(group: UiProjectGroup): void {
 
 function onBrowseProjectFiles(projectName: string): void {
   emit('browse-project-files', projectName)
+  closeProjectMenu()
+}
+
+function onToggleProjectPinned(projectName: string): void {
+  emit('set-project-pinned', {
+    projectName,
+    pinned: !isProjectPinned(projectName),
+  })
   closeProjectMenu()
 }
 

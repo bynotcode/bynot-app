@@ -268,6 +268,7 @@ export type WorkspaceRootsState = {
   labels: Record<string, string>
   active: string[]
   projectOrder: string[]
+  pinnedProjectIds?: string[]
   remoteProjects?: Array<{
     id: string
     hostId: string
@@ -2242,6 +2243,7 @@ function normalizeWorkspaceRootsState(payload: unknown): WorkspaceRootsState {
     labels,
     active: normalizeArray(record.active).map((value) => normalizePathForUi(value)),
     projectOrder: normalizeArray(record.projectOrder).map((value) => normalizePathForUi(value)),
+    pinnedProjectIds: normalizeArray(record.pinnedProjectIds).map((value) => normalizePathForUi(value)),
     remoteProjects: Array.isArray(record.remoteProjects)
       ? record.remoteProjects.flatMap((item) => {
         if (!item || typeof item !== 'object' || Array.isArray(item)) return []
@@ -2351,6 +2353,7 @@ function cloneWorkspaceRootsState(state: WorkspaceRootsState): WorkspaceRootsSta
     labels: { ...state.labels },
     active: [...state.active],
     projectOrder: [...state.projectOrder],
+    pinnedProjectIds: [...(state.pinnedProjectIds ?? [])],
     remoteProjects: state.remoteProjects?.map((item) => ({ ...item })) ?? [],
   }
 }
