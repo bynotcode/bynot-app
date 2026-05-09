@@ -299,6 +299,40 @@ The composer model dropdown loads provider-specific models during normal backgro
 
 ---
 
+### Provider switching preserves selected thread
+
+#### Feature/Change Name
+Switching the API provider from an existing thread keeps the user on that thread and updates the thread's provider-scoped model.
+
+#### Prerequisites/Setup
+1. Dev server running (`pnpm run dev`)
+2. An existing TestChat thread is open
+3. Codex and OpenCode Zen providers are available
+4. Light theme and dark theme both available from the appearance switcher
+
+#### Steps
+1. In light theme, open an existing TestChat thread and note the `/thread/<id>` URL.
+2. Open Settings and switch Provider to `OpenCode Zen`.
+3. Confirm the URL remains on the same `/thread/<id>` route.
+4. Confirm the composer model changes to `big-pickle`.
+5. Send a short message and confirm the response appears in the same thread.
+6. Switch Provider back to `Codex`.
+7. Confirm the URL still remains on the same `/thread/<id>` route.
+8. Confirm the composer model changes to a Codex model and sending still works.
+9. Switch to dark theme and repeat steps 1-8.
+
+#### Expected Results
+- Provider switching does not navigate to the home/new-thread composer.
+- Direct `/thread/<id>` routes remain open even when the thread is temporarily absent from the current provider-filtered sidebar.
+- The app resumes the selected thread against the newly selected provider before starting the next turn.
+- Messages sent after provider switching stay in the selected thread.
+- The composer model remains provider scoped for the selected thread.
+
+#### Rollback/Cleanup
+- Switch Provider/model settings back to preferred defaults if needed.
+
+---
+
 ### Qodo review fixes: automation dropdown dark theme and bridge startup ordering
 
 #### Feature/Change Name

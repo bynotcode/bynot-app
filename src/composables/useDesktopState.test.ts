@@ -527,6 +527,87 @@ describe('model selection', () => {
 
     expect(state.readModelIdForThread('thread-a')).toBe('big-pickle')
   })
+
+  it('resumes the selected thread again after switching providers before sending', async () => {
+    installTestWindow({
+      'codex-web-local.selected-thread-id.v1': 'thread-a',
+    })
+    gatewayMocks.getThreadGroupsPage.mockResolvedValue({
+      groups: [
+        {
+          projectName: 'project',
+          threads: [thread('thread-a', '/tmp/project')],
+        },
+      ],
+      nextCursor: null,
+    })
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['gpt-5.5'])
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'gpt-5.5',
+      providerId: 'openai',
+      reasoningEffort: 'high',
+      speedMode: 'standard',
+    })
+    gatewayMocks.getAccountRateLimits.mockResolvedValue([])
+    gatewayMocks.getAvailableCollaborationModes.mockResolvedValue([])
+    gatewayMocks.getSkillsList.mockResolvedValue([])
+    gatewayMocks.resumeThread.mockResolvedValue({
+      model: 'gpt-5.5',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      turnIndexByTurnId: {},
+    })
+    gatewayMocks.startThreadTurn.mockResolvedValue('turn-1')
+
+    const state = useDesktopState()
+
+    await state.refreshAll({ includeSelectedThreadMessages: false, awaitAncillaryRefreshes: true })
+    await state.ensureThreadMessagesLoaded('thread-a')
+
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledTimes(1)
+
+    gatewayMocks.getAvailableModelIds.mockResolvedValue(['big-pickle'])
+    gatewayMocks.getCurrentModelConfig.mockResolvedValue({
+      model: 'big-pickle',
+      providerId: 'opencode-zen',
+      reasoningEffort: 'high',
+      speedMode: 'standard',
+    })
+
+    await state.refreshAll({
+      includeSelectedThreadMessages: false,
+      awaitAncillaryRefreshes: true,
+      providerChanged: true,
+    })
+
+    gatewayMocks.resumeThread.mockClear()
+    gatewayMocks.resumeThread.mockResolvedValue({
+      model: 'big-pickle',
+      messages: [],
+      inProgress: false,
+      activeTurnId: '',
+      turnIndexByTurnId: {},
+    })
+    gatewayMocks.startThreadTurn.mockClear()
+
+    await state.sendMessageToSelectedThread('hi')
+
+    expect(gatewayMocks.resumeThread).toHaveBeenCalledWith('thread-a')
+    expect(gatewayMocks.startThreadTurn).toHaveBeenCalledWith(
+      'thread-a',
+      'hi',
+      [],
+      'big-pickle',
+      'high',
+      undefined,
+      [],
+      'default',
+    )
+    expect(gatewayMocks.resumeThread.mock.invocationCallOrder[0]).toBeLessThan(
+      gatewayMocks.startThreadTurn.mock.invocationCallOrder[0],
+    )
+  })
 })
 
 describe('findAdjacentThreadId', () => {

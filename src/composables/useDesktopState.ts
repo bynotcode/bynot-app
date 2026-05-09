@@ -1888,6 +1888,9 @@ export function useDesktopState() {
       const normalizedConfiguredModelId = currentConfig.model.trim()
       const normalizedProviderId = normalizeProviderContextId(currentConfig.providerId)
       activeProviderId.value = normalizedProviderId
+      if (options?.providerChanged) {
+        resumedThreadById.value = {}
+      }
       const normalizedSelectedModelId = readModelIdForThread(selectedThreadId.value)
       selectedModelId.value = normalizedSelectedModelId
       ensureAvailableModelIds(normalizedSelectedModelId)

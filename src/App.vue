@@ -1251,8 +1251,10 @@ const terminalStoredQuickCommands = ref<TerminalHeaderQuickCommand[]>(loadTermin
 const terminalHeaderDropdownValue = ref('')
 const editingQueuedMessageState = ref<{ threadId: string; queueIndex: number } | null>(null)
 const isRouteSyncInProgress = ref(false)
+const providerSwitchPreservedThreadId = ref('')
 const directoryTryInFlightKey = ref('')
 let hasPendingRouteSync = false
+let providerSwitchRestoreTimer: number | null = null
 const hasInitialized = ref(false)
 const newThreadCwd = ref('')
 const newThreadRuntime = ref<'local' | 'worktree'>('local')
@@ -3577,10 +3579,40 @@ function toggleDictationAutoSend(): void {
   window.localStorage.setItem(DICTATION_AUTO_SEND_KEY, dictationAutoSend.value ? '1' : '0')
 }
 
+async function restoreThreadRouteAfterProviderChange(threadId: string): Promise<void> {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return
+  primeSelectedThread(normalizedThreadId)
+  if (route.name !== 'thread' || routeThreadId.value !== normalizedThreadId) {
+    await router.replace({ name: 'thread', params: { threadId: normalizedThreadId } })
+  }
+}
+
+function finishProviderSwitchRoutePreservation(threadId: string): void {
+  const normalizedThreadId = threadId.trim()
+  if (!normalizedThreadId) return
+  if (providerSwitchRestoreTimer !== null) {
+    window.clearTimeout(providerSwitchRestoreTimer)
+  }
+  providerSwitchRestoreTimer = window.setTimeout(() => {
+    void restoreThreadRouteAfterProviderChange(normalizedThreadId).finally(() => {
+      if (providerSwitchPreservedThreadId.value === normalizedThreadId) {
+        providerSwitchPreservedThreadId.value = ''
+      }
+      providerSwitchRestoreTimer = null
+    })
+  }, 250)
+}
 
 async function onProviderChange(provider: string): Promise<void> {
   if (freeModeLoading.value) return
   freeModeLoading.value = true
+  const activeThreadIdBeforeProviderChange = (
+    route.name === 'thread' ? routeThreadId.value.trim() : selectedThreadId.value.trim()
+  )
+  if (activeThreadIdBeforeProviderChange) {
+    providerSwitchPreservedThreadId.value = activeThreadIdBeforeProviderChange
+  }
   try {
     if (provider === 'codex') {
       selectedProvider.value = 'codex'
@@ -3612,11 +3644,22 @@ async function onProviderChange(provider: string): Promise<void> {
     }
     providerError.value = ''
     await refreshAll({ includeSelectedThreadMessages: false, providerChanged: true, awaitAncillaryRefreshes: true })
-    if (route.name === 'thread') {
-      void router.push({ name: 'home' })
+    if (activeThreadIdBeforeProviderChange) {
+      const providerModelId = readModelIdForThread('__new-thread__').trim() || selectedModelId.value.trim()
+      if (providerModelId) {
+        setSelectedModelIdForThread(activeThreadIdBeforeProviderChange, providerModelId)
+      }
+      await restoreThreadRouteAfterProviderChange(activeThreadIdBeforeProviderChange)
+      await ensureThreadMessagesLoaded(activeThreadIdBeforeProviderChange, { silent: true }).catch(() => {})
+      await nextTick()
+      await restoreThreadRouteAfterProviderChange(activeThreadIdBeforeProviderChange)
+      finishProviderSwitchRoutePreservation(activeThreadIdBeforeProviderChange)
     }
   } catch (err) {
     providerError.value = err instanceof Error ? err.message : 'Failed to switch provider'
+    if (activeThreadIdBeforeProviderChange && providerSwitchPreservedThreadId.value === activeThreadIdBeforeProviderChange) {
+      providerSwitchPreservedThreadId.value = ''
+    }
   } finally {
     freeModeLoading.value = false
   }
@@ -3885,6 +3928,11 @@ async function syncThreadSelectionWithRoute(): Promise<void> {
       hasPendingRouteSync = false
 
       if (route.name === 'home' || route.name === 'skills') {
+        const preservedThreadId = providerSwitchPreservedThreadId.value.trim()
+        if (route.name === 'home' && preservedThreadId) {
+          await restoreThreadRouteAfterProviderChange(preservedThreadId)
+          continue
+        }
         if (selectedThreadId.value !== '') {
           await selectThread('')
         }
@@ -3897,11 +3945,7 @@ async function syncThreadSelectionWithRoute(): Promise<void> {
 
         if (selectedThreadId.value !== threadId) {
           if (!threadExistsInSidebar(threadId)) {
-            if (selectedThreadId.value) {
-              await router.replace({ name: 'thread', params: { threadId: selectedThreadId.value } })
-            } else {
-              await router.replace({ name: 'home' })
-            }
+            await selectThread(threadId)
             continue
           }
           await selectThread(threadId)
@@ -3954,6 +3998,11 @@ watch(
     if (isHomeRoute.value || isSkillsRoute.value) return
 
     if (!threadId) {
+      const preservedThreadId = providerSwitchPreservedThreadId.value.trim()
+      if (preservedThreadId) {
+        await restoreThreadRouteAfterProviderChange(preservedThreadId)
+        return
+      }
       if (route.name !== 'home') {
         await router.replace({ name: 'home' })
       }
