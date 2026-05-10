@@ -356,14 +356,16 @@ Project rows can create and manage project-scoped cron automations using the sam
 12. If a project row has no resolved absolute cwd, confirm project automation creation is blocked with a clear error and no non-absolute `cwds` value is written.
 13. For a cron automation TOML with multiple `cwds`, edit it from one project and confirm the other `cwds` entries remain in the file.
 14. For the same multi-cwd automation, remove it from one project and confirm only that cwd is removed; the automation folder remains until the final cwd is removed.
-15. Remove one project automation and confirm the project row chip returns to icon-only for one remaining automation.
-16. Remove the final project automation and confirm the project menu returns to `Add automation…` and the project row automation icon disappears.
-17. Switch to dark theme and repeat steps 1-11.
+15. Open the Automations panel with the same multi-cwd automation present and confirm each project association row can be selected and edited independently.
+16. Remove one project automation and confirm the project row chip returns to icon-only for one remaining automation.
+17. Remove the final project automation and confirm the project menu returns to `Add automation…` and the project row automation icon disappears.
+18. Switch to dark theme and repeat steps 1-11.
 
 #### Expected Results
 - Project automations are stored as cron automations with `cwds = ["<absolute project path>"]`, including when the sidebar row displays only the project folder name.
 - Project automation creation/save never persists sidebar display labels or other non-absolute values into `cwds`.
 - Editing or deleting a project automation associated with multiple `cwds` preserves the other project cwd associations instead of overwriting or deleting the shared automation.
+- Multi-cwd project automation rows use a unique row identity per project association, so selection and edit actions target the clicked project row.
 - Thread heartbeat automations remain scoped by `target_thread_id` and continue to use `Run now`.
 - Project automation dialogs use project-specific copy and do not show `Run now`.
 - The project menu, dialog list, inputs, schedule controls, status selector, automation icon, and multi-automation count badge remain readable in light and dark themes.
