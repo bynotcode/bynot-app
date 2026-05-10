@@ -104,19 +104,23 @@ This file tracks manual regression and feature verification steps.
 4. Select a row and confirm the detail panel shows status, schedule, target, id, and prompt.
 5. Click the row `Edit` button and confirm the existing automation editor opens with the selected automation values prefilled.
 6. Close the editor, select the same automation again, then click the detail-panel `Edit` button and confirm the same editor opens.
-7. Click the toolbar `New automation` button and confirm the existing automation editor opens in create mode for the selected row's thread or project target.
-8. Save the new automation and confirm the Automations panel refreshes with the added row.
-9. Change the automation name or status, save, and confirm the Automations panel refreshes with the updated row.
-10. Refresh the panel and confirm the selected automation stays selected when it still exists.
-11. Open `#/automations?automationId=<existing-id>` directly and confirm that automation is selected.
-12. Create another active thread or project automation, refresh the Automations panel, and confirm the newly created active automation appears at the top of the active rows.
-13. Pause an automation and confirm it appears after active automations even if it was created more recently.
-14. Switch to dark theme and repeat steps 1-9.
+7. Click the toolbar `New automation` button and confirm the existing automation editor opens in create mode with `New chat` selected by default.
+8. Switch the target picker to `Existing chat`, search for a chat, and confirm the dropdown filters matching chats.
+9. Switch the target picker to `Project`, search for a project, and confirm the dropdown filters matching projects.
+10. Switch back to `New chat`, save the automation, and confirm a new chat is created with the heartbeat automation attached.
+11. Create another automation from the panel for an existing chat or project and confirm the Automations panel refreshes with the added row.
+12. Change the automation name or status, save, and confirm the Automations panel refreshes with the updated row.
+13. Refresh the panel and confirm the selected automation stays selected when it still exists.
+14. Open `#/automations?automationId=<existing-id>` directly and confirm that automation is selected.
+15. Create another active thread or project automation, refresh the Automations panel, and confirm the newly created active automation appears at the top of the active rows.
+16. Pause an automation and confirm it appears after active automations even if it was created more recently.
+17. Switch to dark theme and repeat steps 1-12.
 
 #### Expected Results
 - The panel combines heartbeat automations from `/codex-api/thread-automations` and project automations from `/codex-api/project-automations`.
 - Rows are sorted active first, then paused, with newest creation time first inside each status group, then newest update time, then automation name.
-- The toolbar `New automation` button creates a blank draft for the currently selected row's thread or project target using the same existing automation editor.
+- The toolbar `New automation` button creates a blank draft with a target picker that defaults to `New chat` and can search existing chats or projects.
+- Saving the default target creates a new chat and attaches the heartbeat automation to it.
 - Row and detail edit buttons open the same existing thread/project automation editor, and saved edits refresh the panel list.
 - Thread targets use known thread titles when available; project targets use known project labels when available.
 - Empty, loading, refresh, and error states remain readable in light and dark themes.
