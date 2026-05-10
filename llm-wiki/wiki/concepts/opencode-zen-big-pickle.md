@@ -58,7 +58,31 @@ For thinking-mode models behind `big-pickle`, the proxy must preserve assistant 
 
 This behavior was fixed in commit `47d52c8c` after a Docker repro using an empty `CODEX_HOME`, no login, and no Zen API key.
 
+## Provider-Scoped Composer Model Behavior
+
+When Codex Web Local is running in free-mode provider workflows, the visible composer model is the model that must be sent for the next turn. Backend `thread/resume`, free-mode status, provider defaults, and per-thread provider choices can all report model state, but the send path must use the currently visible provider-scoped composer model.
+
+The provider/thread scoping fix landed across commits `dc7871a8`, `28f76372`, and `6ecfed96`:
+
+- The composer submit payload includes the visible selected model.
+- The selected model override is passed through `App.vue` into `sendMessageToSelectedThread()`.
+- `turn/start` uses that selected model override instead of allowing a resumed backend model from another provider to replace it.
+- Free-mode status hydrates the provider-scoped model after startup and provider switches.
+- Provider switching preserves existing per-thread/per-provider model selections and only seeds a thread from the provider default when no thread/provider model exists.
+- Free-mode status fetches are bounded with an 8 second timeout.
+
+The validated provider-switch flow was:
+
+| Thread | Provider | Composer model | Sent model | Received reply |
+|--------|----------|----------------|------------|----------------|
+| `019e0aef-f2ca-7d61-8345-efd4aac9ea7b` | OpenRouter | `openrouter/free` | `openrouter/free` | Yes |
+| `019e0d1c-41e0-7670-a55a-664fe46f80a8` | OpenCode Zen | `big-pickle` | `big-pickle` | Yes |
+| `019dc7fa-5291-7670-8b9b-d06ae0548d01` | OpenCode Zen | `big-pickle` | `big-pickle` | Yes |
+
+The browser verification clicked send and waited for an assistant message row containing the exact marker, not only for the outgoing `/codex-api/rpc` `turn/start` payload.
+
 ## Related
 - Source: [opencode-zen-big-pickle-codex-cli.md](../../raw/fixes/opencode-zen-big-pickle-codex-cli.md)
 - Source: [opencode-zen-reasoning-content-proxy.md](../../raw/fixes/opencode-zen-reasoning-content-proxy.md)
+- Source: [provider-scoped-model-selection-zen.md](../../raw/fixes/provider-scoped-model-selection-zen.md)
 - [merge-to-main-workflow.md](./merge-to-main-workflow.md)
