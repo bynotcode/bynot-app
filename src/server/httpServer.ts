@@ -6,6 +6,7 @@ import { writeFile, stat } from 'node:fs/promises'
 import express, { type Express } from 'express'
 import { createCodexBridgeMiddleware } from './codexAppServerBridge.js'
 import { createAuthSession } from './authMiddleware.js'
+import { createBynotBridge, type BynotBridge } from './bynotCliBridge.js'
 import { createDirectoryListingHtml, createTextEditorHtml, decodeBrowsePath, getLocalDirectoryListing, isTextEditableFile, normalizeLocalPath } from './localBrowseUi.js'
 import { WebSocketServer, type WebSocket } from 'ws'
 
@@ -76,6 +77,11 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
   const app = express()
   const bridge = createCodexBridgeMiddleware()
   const authSession = options.password ? createAuthSession(options.password) : null
+  // Held in closure so attachWebSocket can register it against the
+  // shared HttpServer and dispose can tear it down on shutdown. The
+  // bridge instance is created lazily inside attachWebSocket because
+  // it needs the live server reference to install its upgrade handler.
+  let bynotBridge: BynotBridge | null = null
 
   // 1. Auth middleware (if password is set)
   if (authSession) {
@@ -251,12 +257,20 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
 
   return {
     app,
-    dispose: () => bridge.dispose(),
+    dispose: () => {
+      bridge.dispose()
+      bynotBridge?.shutdown()
+    },
     attachWebSocket: (server: HttpServer) => {
       const wss = new WebSocketServer({ noServer: true })
 
       server.on('upgrade', (req: IncomingMessage, socket, head) => {
         const url = new URL(req.url ?? '', 'http://localhost')
+        // Bynot bridge installs its own upgrade handler against the
+        // same server (see createBynotBridge below). Skip our own
+        // dispatch when the upgrade is destined for the Bynot path —
+        // otherwise both handlers race for the same socket.
+        if (url.pathname === '/api/cli/stream') return
         if (url.pathname !== '/codex-api/ws') {
           return
         }
@@ -282,6 +296,13 @@ export function createServer(options: ServerOptions = {}): ServerInstance {
         ws.on('close', unsubscribe)
         ws.on('error', unsubscribe)
       })
+
+      // Mount the new Bynot CLI bridge alongside the legacy codex one.
+      // It installs a separate `upgrade` listener on the same server
+      // and only fires for `/api/cli/stream`, so the two coexist
+      // without interference. Once the UI is fully ported, we'll
+      // remove the codex branch above and the legacy bridge entirely.
+      bynotBridge = createBynotBridge({ server })
     },
   }
 }
