@@ -107,31 +107,45 @@ the bridge in tests/dev.
 |---|---|---|
 | Bynot CLI bridge (server) | `src/server/bynotCliBridge.ts` | ✅ committed |
 | Bynot stream client (browser) | `src/api/bynotStream.ts` | ✅ committed |
-| Free vs premium model picker UI | TBD `src/components/ModelPicker.vue` | 📋 next |
-| Ad-unlock modal | TBD `src/components/AdUnlock.vue` | 📋 next |
-| Supabase auth wiring | TBD `src/api/supabaseClient.ts` | 📋 next |
+| Bridge mounted in HTTP server | `src/server/httpServer.ts` | ✅ committed |
+| Bynot terminal Vue component | `src/components/Bynot/BynotTerminal.vue` | ✅ committed |
+| Free vs premium model picker UI | `src/components/Bynot/ModelPicker.vue` | ✅ scaffold committed |
+| Ad-unlock modal | `src/components/Bynot/AdUnlock.vue` | ✅ scaffold committed |
+| `/api/auth/cli/whoami` on bynot.it | `web/src/app/api/auth/cli/whoami/route.ts` | ✅ committed |
+| Wire BynotTerminal into App.vue routing | `src/App.vue` | 📋 next session |
+| Strip codex bridge files | `src/api/codex*`, `src/server/codexAppServerBridge.*` | 📋 after App.vue switch |
+| Supabase auth wiring | TBD `src/api/supabaseClient.ts` | 📋 after codex strip |
+| Skills Hub + Composio removal | various | 📋 with Supabase swap |
 | Sponsor banner overlay (web equivalent of `@bynot/plugin` TUI slots) | TBD | 📋 later — for now sponsors render inside the embedded TUI |
 
 ## Local dev
 
-The fork is not wired to anything Bynot yet. Roadmap:
+The bridge is mounted server-side but the UI still defaults to the
+upstream codex flow because App.vue hasn't been touched yet. To
+smoke-test JUST the new path right now:
 
 ```bash
 # 1. install
 npm install
 
-# 2. run dev (still calls upstream codex bridge — broken without OpenAI auth)
-npm run dev
+# 2. run dev — also exposes /api/cli/stream via the new BynotBridge
+BYNOT_WEB_URL=https://www.bynot.it npm run dev
+
+# 3. in a browser console, sanity-check that the bridge responds
+const ws = new WebSocket(
+  `ws://localhost:18923/api/cli/stream?token=byn_YOUR_TOKEN`
+)
+ws.onmessage = (e) => console.log(JSON.parse(e.data))
+ws.onopen = () => ws.send(JSON.stringify({ type: 'stdin', data: 'help\n' }))
 ```
 
-After the next chunk of work (strip codex routes, mount Bynot bridge):
+You should see `{ type: 'stdout', ... }` frames as the spawned `bynot`
+CLI writes its TUI to stdout. If the token is invalid you'll see
+`{ type: 'error', message: 'invalid-token' }` followed by a 1008
+close.
 
-```bash
-BYNOT_TOKEN=byn_… BYNOT_WEB_URL=https://www.bynot.it npm run dev
-```
-
-Open `http://localhost:18923`, the bridge attaches to the same HTTP
-server upstream's `httpServer.ts` exposes.
+Until App.vue is rewritten the on-screen UI is still the upstream
+codex view, which will fail without OpenAI auth — that's expected.
 
 ## Open questions for the next sessions
 
@@ -139,3 +153,31 @@ server upstream's `httpServer.ts` exposes.
 2. Where do we render the model picker — in the Bynot app chrome (above the terminal) or inside the CLI TUI? Probably the chrome, so we can show "free vs premium" prominently.
 3. Where does the ad-unlock modal live? Almost certainly in the chrome, NOT the TUI, so we can full-screen it.
 4. Auth: do we adopt Supabase magic-link from the bynot.it side, or build a fresh OAuth flow for the app? Magic-link is faster.
+
+## Next session — concrete TODO list
+
+In priority order, with rough sizing:
+
+1. **Wire BynotTerminal into App.vue** (3-4h). Pick a path: either replace the
+   existing thread-detail view, or add a `/bynot` route guarded by a feature
+   flag. The flag path keeps codex working as a comparison while we polish.
+2. **Add Bynot login flow** (1-2h). Minimum viable: a single screen that
+   asks for a `byn_*` token, stores it in localStorage, and feeds it into
+   BynotTerminal. Replace with proper Supabase magic-link in step 5.
+3. **Mount ModelPicker + AdUnlock above the terminal** (1-2h). The picker
+   doesn't need a backend yet — start with hardcoded models and a fake
+   credits counter. Emit-only.
+4. **Strip codex bridge files** (2-3h). Once the BynotTerminal path is the
+   default, remove `src/api/codex*`, `src/server/codexAppServerBridge.*`,
+   `src/server/skillsRoutes.ts`, `src/composables/useGithubSkillsSync.ts`,
+   `src/composables/useDictation.ts`. Fix the import fallout.
+5. **Swap Firebase for Supabase** (4-6h). Touches authStore, every
+   server route that reads `req.user`, the login screen. Reuse the
+   Supabase client from `bynot/web` for parity. Largest single chunk
+   on this list.
+6. **Real credits + ads endpoints** (3-4h). Add to bynot.it:
+   `/api/v1/credits/balance`, `/api/v1/credits/grant-from-impression`,
+   `/api/v1/ads/active` (could reuse the existing `/api/sponsor/active`).
+   Wire the ModelPicker + AdUnlock components to consume them.
+7. **Static publish** (1h). `bynot-app.vercel.app` or run `npx
+   @bynot/app` from npm. Decide which packaging story we ship with.
