@@ -27,8 +27,8 @@
     "node": ">=18"
   },
   "bin": {
-    "codexapp": "dist-cli/index.js",
-    "codexui": "dist-cli/index.js"
+    "bynot-app": "dist-cli/index.js",
+    "bynotapp": "dist-cli/index.js"
   },
   "files": [
     "dist/",

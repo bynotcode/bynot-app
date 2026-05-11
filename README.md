@@ -45,25 +45,43 @@ We keep the UI shell as-is:
 - Voice dictation (rebuild later if there is demand)
 - Telegram bridge (optional plugin in a future version)
 
-## Run locally (current state)
-
-The fork is still mostly the upstream codexapp until the bridge is rewritten.
-Don't expect it to work against Bynot yet.
+## Run locally
 
 ```bash
 npm install
-npm run dev
+
+# 1. Make sure the bynot CLI is on PATH (or pass BYNOT_CLI_BIN)
+#    Pre-launch: cd /private/tmp/drape-cli && bun link --bin
+
+# 2. Start the dev server (bridge + Vite HMR)
+BYNOT_WEB_URL=https://www.bynot.it npm run dev
 ```
 
-Open the printed `localhost` URL.
+Open the printed `localhost` URL. The default view is the new Bynot
+shell. To compare against the upstream codex view, append `?codex=1`
+to the URL.
 
-## Roadmap
+When prompted, paste your `byn_…` token. You can issue one with
+`bun scripts/issue-cli-token.ts <email>` from the main Bynot web repo.
 
-1. Strip Codex-specific bridge files
-2. Add `src/server/bynotCliBridge.ts` — spawns Bynot CLI, pipes stdio over WebSocket to xterm
-3. Wire Supabase auth (reuse `web/src/lib/supabase` from the Bynot main repo)
-4. Free vs premium model picker + ads-for-credits flow
-5. Cross-platform packaging (web first; native wrappers later via Tauri)
+## Status
+
+| Slice | State |
+|---|---|
+| WS bridge (`bynotCliBridge.ts`) | ✅ |
+| xterm.js terminal (`BynotTerminal.vue`) | ✅ |
+| Free/premium model picker | ✅ scaffold (hardcoded model list) |
+| Ad-unlock modal | ✅ wired to real `/api/v1/credits/grant` |
+| Credits balance via API | ✅ |
+| Token login screen | ✅ |
+| **DEFAULT shell** | ✅ Bynot (codex behind `?codex=1`) |
+| Strip codex source | ⏳ Defer — kept as fallback for now |
+| Firebase → Supabase | ⏳ BynotApp doesn't load Firebase; codex fallback still does |
+| `npx @bynot/app` publish | ⏳ See `docs/deploy.md` |
+
+See [`docs/architecture.md`](./docs/architecture.md) for the deep
+architecture write-up and [`docs/deploy.md`](./docs/deploy.md) for
+the distribution plan.
 
 ## Credit
 
