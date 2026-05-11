@@ -39,7 +39,7 @@ import { WebSocket, WebSocketServer } from "ws"
 
 /**
  * Where the Bynot CLI binary lives. Order of preference:
- *   1. BYNOT_CLI_BIN env var (absolute path)
+ *   1. BYNOT_CLI_BIN env var (absolute path or argv[0] resolvable via PATH)
  *   2. PATH lookup for `bynot`
  *   3. PATH lookup for `opencode` (fork ancestor, fallback during dev)
  */
@@ -50,8 +50,28 @@ function resolveBin(): string {
   return process.platform === "win32" ? "bynot.exe" : "bynot"
 }
 
-/** Default args passed to every spawned CLI process. */
-const DEFAULT_ARGS: string[] = []
+/**
+ * Default args passed to every spawned CLI process.
+ *
+ * Override via BYNOT_CLI_ARGS — interpreted as a shell-style space-
+ * separated list. Useful in dev when BYNOT_CLI_BIN points at `bun`
+ * and you need to pass `--cwd <path> src/index.ts` so bun knows
+ * which script to execute. Example:
+ *
+ *   BYNOT_CLI_BIN=bun \
+ *   BYNOT_CLI_ARGS='--cwd /private/tmp/drape-cli/packages/opencode --conditions=browser src/index.ts' \
+ *   npm run dev
+ */
+function resolveDefaultArgs(): string[] {
+  const env = process.env.BYNOT_CLI_ARGS
+  if (!env) return []
+  // Simple whitespace split — good enough for dev. We don't handle
+  // quoted args; if you need them, just embed them in a wrapper
+  // script and point BYNOT_CLI_BIN at the wrapper.
+  return env.split(/\s+/).filter(Boolean)
+}
+
+const DEFAULT_ARGS: string[] = resolveDefaultArgs()
 
 /** Maximum WebSocket message size to forward into the child (defensive). */
 const MAX_INBOUND_FRAME_BYTES = 64 * 1024
