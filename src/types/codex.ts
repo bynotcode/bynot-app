@@ -111,7 +111,7 @@ export type UiFileChange = {
   removedLineCount: number
 }
 
-export type UiReviewScope = 'workspace' | 'baseBranch'
+export type UiReviewScope = 'workspace' | 'baseBranch' | 'commit'
 export type UiReviewWorkspaceView = 'unstaged' | 'staged'
 export type UiReviewAction = 'stage' | 'unstage' | 'revert'
 export type UiReviewActionLevel = 'all' | 'file' | 'hunk'
@@ -159,6 +159,7 @@ export type UiReviewSnapshot = {
   workspaceView: UiReviewWorkspaceView
   baseBranch: string | null
   baseBranchOptions: string[]
+  commitSha: string | null
   headBranch: string | null
   mergeBaseSha: string | null
   generatedAtIso: string
