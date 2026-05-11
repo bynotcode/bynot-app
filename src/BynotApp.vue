@@ -18,7 +18,7 @@
  *   When the user tries a premium model with no credits, AdUnlock
  *   overlays the whole shell.
  */
-import { computed, onMounted, ref } from "vue"
+import { computed, onMounted, ref, watch } from "vue"
 
 import BynotTerminal from "./components/Bynot/BynotTerminal.vue"
 import ModelPicker from "./components/Bynot/ModelPicker.vue"
@@ -36,6 +36,23 @@ const pendingUnlock = ref<{
   modelId: string
   modelLabel: string
 } | null>(null)
+
+const bynotWebUrl = (import.meta as { env?: { VITE_BYNOT_WEB_URL?: string } })
+  .env?.VITE_BYNOT_WEB_URL ?? "https://www.bynot.it"
+
+async function refreshBalance() {
+  if (!token.value) return
+  try {
+    const res = await fetch(`${bynotWebUrl}/api/v1/credits/balance`, {
+      headers: { Authorization: `Bearer ${token.value}` },
+    })
+    if (!res.ok) return
+    const body = (await res.json()) as { balance?: number }
+    if (typeof body.balance === "number") credits.value = body.balance
+  } catch {
+    // ignored — credits stay at the previous value
+  }
+}
 
 const sponsorForUnlock = ref<{
   id: string
@@ -79,10 +96,8 @@ async function onUnlockRequest(model: {
   // Failure is non-fatal — the modal falls back to a generic Bynot
   // placeholder copy.
   try {
-    const baseUrl = (import.meta as { env?: { VITE_BYNOT_WEB_URL?: string } })
-      .env?.VITE_BYNOT_WEB_URL ?? "https://www.bynot.it"
     const res = await fetch(
-      `${baseUrl}/api/sponsor/active?placement=session_message_below_assistant`,
+      `${bynotWebUrl}/api/sponsor/active?placement=session_message_below_assistant`,
     )
     if (res.ok) {
       const body = (await res.json()) as {
@@ -104,22 +119,42 @@ async function onUnlockRequest(model: {
   }
 }
 
-function onClaim() {
-  if (!pendingUnlock.value) return
-  // Placeholder grant — server-side endpoint will replace this with a
-  // signed transaction once it ships. For now: bump local credits so
-  // the user can pick the premium model in the same session.
-  credits.value += 10
-  currentModel.value = pendingUnlock.value.modelId
-  pendingUnlock.value = null
-  sponsorForUnlock.value = null
+async function onClaim() {
+  if (!pendingUnlock.value || !token.value) return
+  // Hit the server grant endpoint. The server is the source of truth
+  // for the credits balance; if the call fails we don't switch the
+  // selected model so the user sees the error and can retry.
+  try {
+    const res = await fetch(`${bynotWebUrl}/api/v1/credits/grant`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token.value}`,
+      },
+      body: JSON.stringify({
+        campaignId: sponsorForUnlock.value?.id,
+      }),
+    })
+    if (!res.ok) {
+      const body = (await res.json().catch(() => ({}))) as {
+        error?: string
+      }
+      tokenError.value = body.error ?? `Grant failed (${res.status})`
+      return
+    }
+    const body = (await res.json()) as { newBalance?: number }
+    if (typeof body.newBalance === "number") credits.value = body.newBalance
+    currentModel.value = pendingUnlock.value.modelId
+    pendingUnlock.value = null
+    sponsorForUnlock.value = null
+  } catch {
+    // Network failure — leave the modal open so the user can retry
+  }
 }
 
 function onClickSponsor(sponsorId: string) {
   // Best-effort impression record. Server already exposes this.
-  const baseUrl = (import.meta as { env?: { VITE_BYNOT_WEB_URL?: string } })
-    .env?.VITE_BYNOT_WEB_URL ?? "https://www.bynot.it"
-  void fetch(`${baseUrl}/api/sponsor/impression`, {
+  void fetch(`${bynotWebUrl}/api/sponsor/impression`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ campaignId: sponsorId }),
@@ -137,6 +172,13 @@ onMounted(() => {
   if (window.location.hash && window.location.hash !== "#/") {
     window.location.hash = "#/"
   }
+  void refreshBalance()
+})
+
+// Refresh credits whenever the token is set/changed (login, paste, etc.).
+watch(token, (next) => {
+  if (next) void refreshBalance()
+  else credits.value = 0
 })
 </script>
 
