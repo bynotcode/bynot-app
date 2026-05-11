@@ -1,26 +1,26 @@
 {
-  "name": "codexapp",
-  "version": "0.1.87",
-  "description": "A lightweight web interface for Codex that runs on top of the Codex app-server, allowing remote access from any browser",
+  "name": "@bynot/app",
+  "version": "0.1.0",
+  "description": "Bynot — free AI coding agent with a browser-accessible UI. Built on the codexUI shell, wired to OpenCode/Bynot CLI underneath.",
   "type": "module",
-  "license": "MIT",
-  "author": "Pavel Voronin, Igor Levochkin",
+  "license": "SEE LICENSE IN LICENSE",
+  "author": "Bynot contributors",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/friuns2/codexui.git"
+    "url": "git+https://github.com/bynotcode/bynot-app.git"
   },
-  "homepage": "https://github.com/friuns2/codexui#readme",
+  "homepage": "https://bynot.it",
   "bugs": {
-    "url": "https://github.com/friuns2/codexui/issues"
+    "url": "https://github.com/bynotcode/bynot-app/issues"
   },
   "publishConfig": {
     "access": "public"
   },
   "keywords": [
-    "codex",
-    "openai",
+    "bynot",
+    "ai-coding",
+    "free",
     "web-ui",
-    "remote",
     "cli"
   ],
   "engines": {
